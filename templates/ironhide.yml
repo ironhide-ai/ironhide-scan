@@ -1,29 +1,48 @@
-# Ironhide referee gate for GitLab CI (plain remote-include form).
+# Ironhide referee gate — GitLab CI/CD component.
 #
-# Prefer the CI/CD component (templates/ironhide.yml) if you can:
 #   include:
 #     - component: $CI_SERVER_FQDN/ironhide1/ironhide-scan/ironhide@1
 #
-# This file is the equivalent for a plain remote include:
-#   include:
-#     - remote: 'https://gitlab.com/ironhide1/ironhide-scan/-/raw/v1/templates/gitlab-ci.yml'
+# Set masked CI/CD variables (Settings -> CI/CD -> Variables):
+#   IRONHIDE_API_KEY   your agent's key (from `ironhide connect`)   [required]
+#   IRONHIDE_AGENT_ID  the connected agent's id                     [required unless a .ironhide.yml is committed]
+#   GITLAB_TOKEN       project access token, `api` scope            [optional — only to post the MR note; CI_JOB_TOKEN can't]
 #
-# Set masked CI/CD variables: IRONHIDE_API_KEY (required), IRONHIDE_AGENT_ID
-# (unless a .ironhide.yml is committed), GITLAB_TOKEN (api scope — only to post
-# the MR note; the gate works without it). Optional: IRONHIDE_ADVISORY ("true"),
-# IRONHIDE_BLOCK_ON ("exfiltration"), IRONHIDE_SAMPLES, IRONHIDE_URL.
-# Exit codes: 0 = PASS/WARN/INCONCLUSIVE/advisory/baseline, 1 = FAIL/BLOCK, 2 = unavailable.
+# Exit codes: 0 = PASS/WARN/INCONCLUSIVE/advisory/baseline, 1 = FAIL or BLOCK
+# (when advisory_mode "false"), 2 = unavailable. Self-contained — no external
+# fetch at runtime.
 
-ironhide:
+spec:
+  inputs:
+    stage:
+      default: test
+      description: Pipeline stage the job runs in.
+    advisory_mode:
+      default: "true"
+      description: '"true" posts the verdict without failing the pipeline; "false" gates on FAIL/BLOCK.'
+    block_on:
+      default: exfiltration
+      description: Comma-separated effect categories that hard-block when gating.
+    server:
+      default: "https://app.ironhideai.com"
+      description: Ironhide server base URL.
+    baseline:
+      default: "$CI_DEFAULT_BRANCH"
+      description: Baseline label this MR is gated against.
+---
+"ironhide":
+  stage: $[[ inputs.stage ]]
   image: python:3.12-slim
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
   variables:
-    IRONHIDE_ADVISORY: "true"
-    IRONHIDE_BLOCK_ON: "exfiltration"
+    IRONHIDE_ADVISORY: "$[[ inputs.advisory_mode ]]"
+    IRONHIDE_BLOCK_ON: "$[[ inputs.block_on ]]"
+    IRONHIDE_URL: "$[[ inputs.server ]]"
+    IRONHIDE_BASELINE: "$[[ inputs.baseline ]]"
   script:
     - apt-get update -qq && apt-get install -y -qq curl jq ca-certificates >/dev/null
-    - curl -fsSL "${IRONHIDE_URL:-https://app.ironhideai.com}/install.sh" | sh
+    - curl -fsSL "${IRONHIDE_URL%/}/install.sh" | sh
     - export PATH="$HOME/.local/bin:$PATH"
     - |
       agent_args=()
@@ -35,6 +54,7 @@ ironhide:
       GATE_LINE="$(grep -E '^IRONHIDE-GATE' /tmp/ironhide.out | tail -1)"
       RESULT="$(printf '%s' "$GATE_LINE" | grep -oE 'result=[A-Z_]+' | cut -d= -f2)"
     - |
+      # Post/refresh one MR note with the verdict (needs GITLAB_TOKEN, api scope).
       if [ -n "${GITLAB_TOKEN:-}" ] && [ -n "${CI_MERGE_REQUEST_IID:-}" ]; then
         marker="<!-- ironhide-scan -->"
         fence='```'
