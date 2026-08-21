@@ -2,7 +2,7 @@
 #
 # Prefer the CI/CD component (templates/ironhide.yml) if you can:
 #   include:
-#     - component: $CI_SERVER_FQDN/ironhide1/ironhide-scan/ironhide@1
+#     - component: $CI_SERVER_FQDN/ironhide1/ironhide-scan/ironhide@v1
 #
 # This file is the equivalent for a plain remote include:
 #   include:

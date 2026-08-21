@@ -104,7 +104,7 @@ Preferred — the **CI/CD component**:
 
 ```yaml
 include:
-  - component: $CI_SERVER_FQDN/ironhide1/ironhide-scan/ironhide@1
+  - component: $CI_SERVER_FQDN/ironhide1/ironhide-scan/ironhide@v1
 ```
 
 Or a plain remote include:
