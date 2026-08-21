@@ -1,0 +1,109 @@
+name: "Ironhide Scan"
+description: "Pull the agent your PR builds into a sandboxed arena, attack it, and post an observed-state verdict — graded on what the agent did, not what it said."
+author: "Ironhide"
+branding:
+  icon: "shield"
+  color: "orange"
+
+inputs:
+  api_key:
+    description: "Your agent's Ironhide API key. Always pass via ${{ secrets.IRONHIDE_API_KEY }} — never commit it."
+    required: true
+  agent_id:
+    description: "The connected agent's id (from `ironhide connect`). Optional if the repo commits a .ironhide.yml carrying agent_id; otherwise set it here so a fresh CI checkout can resolve the agent."
+    required: false
+    default: ""
+  advisory_mode:
+    description: "true (default) posts the verdict as a comment + passing check and never fails the build. Set false to gate: a FAIL, or a BLOCK per block_on, fails the build."
+    required: false
+    default: "true"
+  block_on:
+    description: "Comma-separated effect categories that hard-block without statistics when advisory_mode is false — one observed effect in a listed category yields BLOCK. Add 'inconclusive' if unverified runs must not merge."
+    required: false
+    default: "exfiltration"
+  runs:
+    description: "Attacked episodes per sweep. More runs, tighter noise floor. Empty = suite default."
+    required: false
+    default: ""
+  baseline_branch:
+    description: "The branch whose trailing clean rate is the baseline this PR is compared against."
+    required: false
+    default: "main"
+  server:
+    description: "Ironhide server base URL."
+    required: false
+    default: "https://app.ironhideai.com"
+  comment:
+    description: "Post (and update) the verdict as a PR comment. Needs 'permissions: pull-requests: write'."
+    required: false
+    default: "true"
+
+outputs:
+  result:
+    description: "The verdict: PASS / FAIL / BLOCK / WARN / INCONCLUSIVE / BASELINE / UNAVAILABLE."
+    value: ${{ steps.test.outputs.result }}
+  gate_line:
+    description: "The full machine-readable IRONHIDE-GATE line."
+    value: ${{ steps.test.outputs.gate_line }}
+
+runs:
+  using: "composite"
+  steps:
+    # The client holds its own baseline (see `ironhide test`). Persist it across
+    # runs so a PR gates against the baseline branch's trailing clean rate.
+    - name: Restore Ironhide baseline
+      uses: actions/cache@v4
+      with:
+        path: ~/.ironhide/baselines
+        key: ironhide-baseline-${{ inputs.baseline_branch }}-${{ github.run_id }}
+        restore-keys: |
+          ironhide-baseline-${{ inputs.baseline_branch }}-
+
+    - name: Install the Ironhide CLI
+      shell: bash
+      run: |
+        curl -fsSL "${IRONHIDE_URL%/}/install.sh" | sh
+        echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      env:
+        IRONHIDE_URL: ${{ inputs.server }}
+
+    - name: Run ironhide test
+      id: test
+      shell: bash
+      env:
+        IRONHIDE_API_KEY: ${{ inputs.api_key }}
+        IRONHIDE_URL: ${{ inputs.server }}
+        IRONHIDE_ADVISORY: ${{ inputs.advisory_mode }}
+        IRONHIDE_BLOCK_ON: ${{ inputs.block_on }}
+        IRONHIDE_SAMPLES: ${{ inputs.runs }}
+        BASELINE_LABEL: ${{ inputs.baseline_branch }}
+        AGENT_ID: ${{ inputs.agent_id }}
+      run: |
+        set +e
+        agent_args=()
+        [ -n "$AGENT_ID" ] && agent_args=(--agent-id "$AGENT_ID")
+        ironhide test "${agent_args[@]}" --label "$BASELINE_LABEL" 2>&1 | tee /tmp/ironhide-out.txt
+        code=${PIPESTATUS[0]}
+        set -e
+        gate_line="$(grep -E '^IRONHIDE-GATE' /tmp/ironhide-out.txt | tail -1)"
+        result="$(printf '%s' "$gate_line" | grep -oE 'result=[A-Z_]+' | cut -d= -f2)"
+        echo "result=${result:-UNAVAILABLE}" >> "$GITHUB_OUTPUT"
+        {
+          echo "gate_line<<__EOF__"
+          printf '%s\n' "$gate_line"
+          echo "__EOF__"
+        } >> "$GITHUB_OUTPUT"
+        echo "code=$code" >> "$GITHUB_OUTPUT"
+
+    - name: Post the verdict on the PR
+      if: ${{ inputs.comment == 'true' && github.event_name == 'pull_request' && always() }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        RESULT: ${{ steps.test.outputs.result }}
+        GATE_LINE: ${{ steps.test.outputs.gate_line }}
+      run: ${{ github.action_path }}/comment.sh
+
+    - name: Enforce the gate
+      shell: bash
+      run: exit ${{ steps.test.outputs.code }}
