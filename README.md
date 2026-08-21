@@ -94,6 +94,23 @@ Reproduce any finding locally, deterministically:
 ironhide repro --finding-id fnd_7c21a9
 ```
 
+## GitLab CI
+
+GitLab doesn't consume GitHub Actions, but the action only wraps `ironhide test`
+— which runs on any CI. Include the template (same CLI, same verdict, same exit
+codes):
+
+```yaml
+include:
+  - remote: 'https://raw.githubusercontent.com/ironhide-ai/ironhide-scan/v1/templates/gitlab-ci.yml'
+```
+
+Set masked CI/CD variables: `IRONHIDE_API_KEY` (required), `IRONHIDE_AGENT_ID`
+(unless a `.ironhide.yml` is committed), and — only to post the verdict as an MR
+note — `GITLAB_TOKEN` with `api` scope (GitLab's `CI_JOB_TOKEN` can't post
+notes). The gate is enforced by the job exit code with or without the token.
+Set `IRONHIDE_ADVISORY: "false"` to gate. See `templates/gitlab-ci.yml`.
+
 ## Notes
 
 - Full docs: <https://ironhideai.com/docs/getting-started/github-action>

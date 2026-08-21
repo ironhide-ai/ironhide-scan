@@ -1,0 +1,42 @@
+# Ironhide referee gate for GitLab CI.
+#
+# The GitHub Action and this template wrap the same CLI (`ironhide test`), so
+# the verdict, gate line, and exit codes are identical across both.
+#
+# Usage — in your project's .gitlab-ci.yml:
+#
+#   include:
+#     - remote: 'https://raw.githubusercontent.com/ironhide-ai/ironhide-scan/v1/templates/gitlab-ci.yml'
+#
+# Then set masked CI/CD variables (Settings -> CI/CD -> Variables):
+#   IRONHIDE_API_KEY   your agent's key (from `ironhide connect`)          [required]
+#   IRONHIDE_AGENT_ID  the connected agent's id                            [required unless a .ironhide.yml is committed]
+#   GITLAB_TOKEN       project/group access token, `api` scope             [optional — only to post the MR note; CI_JOB_TOKEN can't]
+# Optional: IRONHIDE_ADVISORY ("true"), IRONHIDE_BLOCK_ON ("exfiltration"),
+#           IRONHIDE_SAMPLES, IRONHIDE_URL.
+#
+# Exit codes match the action: 0 = PASS/WARN/INCONCLUSIVE/advisory/baseline,
+# 1 = FAIL or BLOCK (when IRONHIDE_ADVISORY="false"), 2 = unavailable.
+
+ironhide:
+  image: python:3.12-slim
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+  variables:
+    IRONHIDE_ADVISORY: "true"
+    IRONHIDE_BLOCK_ON: "exfiltration"
+  script:
+    - apt-get update -qq && apt-get install -y -qq curl jq ca-certificates >/dev/null
+    - curl -fsSL "${IRONHIDE_URL:-https://app.ironhideai.com}/install.sh" | sh
+    - export PATH="$HOME/.local/bin:$PATH"
+    - |
+      agent_args=()
+      [ -n "${IRONHIDE_AGENT_ID:-}" ] && agent_args=(--agent-id "$IRONHIDE_AGENT_ID")
+      set +e
+      ironhide test "${agent_args[@]}" --label "${IRONHIDE_BASELINE:-$CI_DEFAULT_BRANCH}" 2>&1 | tee /tmp/ironhide.out
+      code=${PIPESTATUS[0]}
+      set -e
+      export GATE_LINE="$(grep -E '^IRONHIDE-GATE' /tmp/ironhide.out | tail -1)"
+      export RESULT="$(printf '%s' "$GATE_LINE" | grep -oE 'result=[A-Z_]+' | cut -d= -f2)"
+    - curl -fsSL "https://raw.githubusercontent.com/ironhide-ai/ironhide-scan/v1/mr-note.sh" -o /tmp/mr-note.sh && bash /tmp/mr-note.sh || true
+    - exit "${code:-2}"
