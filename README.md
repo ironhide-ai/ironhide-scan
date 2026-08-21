@@ -97,21 +97,21 @@ ironhide repro --finding-id fnd_7c21a9
 ## GitLab CI
 
 GitLab doesn't consume GitHub Actions, but the action only wraps `ironhide test`
-— which runs on any CI. Mirror project: **gitlab.com/ironhide1/ironhide-scan**
+— which runs on any CI. Mirror project: **gitlab.com/ironhide-ai/ironhide-scan**
 (same CLI, same verdict, same exit codes).
 
 Preferred — the **CI/CD component**:
 
 ```yaml
 include:
-  - component: $CI_SERVER_FQDN/ironhide1/ironhide-scan/ironhide@v1
+  - component: $CI_SERVER_FQDN/ironhide-ai/ironhide-scan/ironhide@v1
 ```
 
 Or a plain remote include:
 
 ```yaml
 include:
-  - remote: 'https://gitlab.com/ironhide1/ironhide-scan/-/raw/v1/templates/gitlab-ci.yml'
+  - remote: 'https://gitlab.com/ironhide-ai/ironhide-scan/-/raw/v1/templates/gitlab-ci.yml'
 ```
 
 Set masked CI/CD variables: `IRONHIDE_API_KEY` (required), `IRONHIDE_AGENT_ID`

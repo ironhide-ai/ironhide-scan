@@ -1,7 +1,7 @@
 # Ironhide referee gate — GitLab CI/CD component.
 #
 #   include:
-#     - component: $CI_SERVER_FQDN/ironhide1/ironhide-scan/ironhide@v1
+#     - component: $CI_SERVER_FQDN/ironhide-ai/ironhide-scan/ironhide@v1
 #
 # Set masked CI/CD variables (Settings -> CI/CD -> Variables):
 #   IRONHIDE_API_KEY   your agent's key (from `ironhide connect`)   [required]
