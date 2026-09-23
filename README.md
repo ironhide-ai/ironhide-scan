@@ -11,21 +11,34 @@ Observed-state verdicts are **preview** (`arena-l3-preview`): an honest
 measurement, not a certification. Run advisory-first, watch the baseline settle,
 then turn gating on.
 
-## Release status and verified installation
+## Verified installation
 
-The driver-enabled Action release and its versioned CLI artifact are not yet
-published. This integration must remain unreleased until the approved tag and
-digest are available;
-the existing public `v1` tag is not evidence that these new inputs are available.
-Use an approved release tag or immutable commit after publication.
+Pin a release tag, not a moving alias:
 
-Set the repository variable `IRONHIDE_CLI_SHA256` to the CLI SHA-256 supplied
-with that approved release. The Action downloads `/cli/ironhide.py` from `server`
-and verifies its bytes **before execution**. Missing or mismatched digests fail
-the job, including in advisory mode. It never executes the mutable installer.
-A server update that changes CLI bytes requires an explicitly reviewed digest
-update; do not calculate and trust a fresh digest from the same download in CI.
-Release checksum retrieval and publication remain release-owner tasks.
+```yaml
+- uses: ironhide-ai/ironhide-scan@v2.0.0
+```
+
+Set the repository variable `IRONHIDE_CLI_SHA256` to the CLI SHA-256 published
+with that release. The Action downloads the `ironhide.py` artifact attached to
+the release and verifies its bytes **before execution**; a missing or mismatched
+digest fails the job, including in advisory mode. It never pipes an installer
+into a shell.
+
+The artifact is immutable for the life of the tag, so the digest you pin stays
+valid -- it does not change when the Ironhide server is updated. If you mirror
+the artifact internally, point `cli_url` at your copy and pin its digest. Never
+point `cli_url` at a live server path: those bytes change on every deploy and
+would break your gate.
+
+Upgrading is deliberate: move to the new tag and update `IRONHIDE_CLI_SHA256` to
+the digest that release publishes. Never take a fresh digest from the same
+download in CI -- that verifies a file against itself.
+
+> `v2` requires the Action to drive your agent: pass `adapter` or
+> `agent_factory`, or set them in `.ironhide.yml`. A run with no driver
+> configured fails rather than reporting a pass it never earned. The older `v1`
+> tag does not drive your agent and is not a supported configuration.
 
 ## Quick start
 
