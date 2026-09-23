@@ -13,8 +13,23 @@ inputs:
     description: "The connected agent's id (from `ironhide connect`). Optional if the repo commits a .ironhide.yml carrying agent_id; otherwise set it here so a fresh CI checkout can resolve the agent."
     required: false
     default: ""
+  adapter:
+    description: "Customer driver module:object; overrides .ironhide.yml. Mutually exclusive with agent_factory."
+    required: false
+    default: ""
+  agent_factory:
+    description: "Customer tool-binding factory module:callable; overrides .ironhide.yml. Mutually exclusive with adapter."
+    required: false
+    default: ""
+  cli_sha256:
+    description: "Required SHA-256 of the approved CLI release. Verified before any downloaded code is executed."
+    required: true
+  cli_url:
+    description: "Where the verified CLI is fetched from. Defaults to the immutable release asset that ships with this Action version, so the pinned cli_sha256 stays valid for the life of the tag. Point it elsewhere only if you mirror the asset internally — a live server path would change under you on every Ironhide deploy and break this gate."
+    required: false
+    default: "https://github.com/ironhide-ai/ironhide-scan/releases/download/v2.0.0/ironhide.py"
   advisory_mode:
-    description: "true (default) posts the verdict as a comment + passing check and never fails the build. Set false to gate: a FAIL, or a BLOCK per block_on, fails the build."
+    description: "true (default) reports security regressions without failing; configuration and unavailable results still fail. Set false to gate: a FAIL, or a BLOCK per block_on, fails the build."
     required: false
     default: "true"
   block_on:
@@ -22,11 +37,11 @@ inputs:
     required: false
     default: "exfiltration"
   runs:
-    description: "Attacked episodes per sweep. More runs, tighter noise floor. Empty = suite default."
+    description: "Samples per episode. Empty = project configuration or CLI default."
     required: false
     default: ""
   baseline_branch:
-    description: "The branch whose trailing clean rate is the baseline this PR is compared against."
+    description: "The branch whose trailing clean rate is the baseline this PR is compared against. A run ON this branch refreshes the baseline; every other run reads it without writing."
     required: false
     default: "main"
   server:
@@ -45,27 +60,57 @@ outputs:
   gate_line:
     description: "The full machine-readable IRONHIDE-GATE line."
     value: ${{ steps.test.outputs.gate_line }}
+  baseline_restored:
+    description: "true when a baseline cache matched. Inspect result and graded to confirm a comparison ran."
+    value: ${{ steps.restore.outputs.cache-matched-key != '' }}
 
 runs:
   using: "composite"
   steps:
-    # The client holds its own baseline (see `ironhide test`). Persist it across
-    # runs so a PR gates against the baseline branch's trailing clean rate.
-    - name: Restore Ironhide baseline
-      uses: actions/cache@v4
+    # The client holds its own baseline. `ironhide test` writes it to
+    # `.ironhide/baseline-<label>.json` RELATIVE TO THE WORKING DIRECTORY
+    # (cli/ironhide.py: BASELINE_DIR = ".ironhide"), so that is the path
+    # persisted here. It has to be the same string: this step used to cache
+    # `~/.ironhide/baselines`, a path the CLI has never written and has no code
+    # to write (no path it builds carries a "baselines" segment), so the restore
+    # was a no-op, every run was a first run, and the gate returned BASELINE and
+    # exit 0 forever. tests/test_cli.py now pins this path to the CLI constant
+    # so the two cannot drift apart again.
+    #
+    # This step must run AFTER the caller's actions/checkout: checkout's default
+    # `clean: true` runs `git clean -ffdx`, which would delete a restored,
+    # untracked .ironhide/. As a composite action's steps run in the caller's
+    # job after the steps above it, that ordering holds for the documented
+    # workflow — keep this action after checkout.
+    #
+    # RESTORE-ONLY, on purpose. The save is a separate step below, gated on the
+    # baseline branch: a merge request must not rewrite the baseline it is being
+    # judged against, or a PR's second run gates against the PR's own already
+    # regressed first run and the regression disappears. This is the same
+    # pull-vs-pull-push split the published GitLab component uses.
+    #
+    # The key interpolates github.run_id, so the exact key can never hit and the
+    # restore always falls through to the prefix in restore-keys — which is the
+    # intent: restore the MOST RECENT baseline for this branch, then (on the
+    # baseline branch only) write a fresh one under a new unique key. A stable
+    # exact key would hit the first cache written and never pick up a newer one,
+    # because a cache entry is immutable once created.
+    - name: Restore the Ironhide baseline
+      id: restore
+      uses: actions/cache/restore@v4
       with:
-        path: ~/.ironhide/baselines
+        path: .ironhide
         key: ironhide-baseline-${{ inputs.baseline_branch }}-${{ github.run_id }}
         restore-keys: |
           ironhide-baseline-${{ inputs.baseline_branch }}-
 
     - name: Install the Ironhide CLI
       shell: bash
-      run: |
-        curl -fsSL "${IRONHIDE_URL%/}/install.sh" | sh
-        echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      run: bash "$GITHUB_ACTION_PATH/install-verified.sh"
       env:
         IRONHIDE_URL: ${{ inputs.server }}
+        CLI_SHA256: ${{ inputs.cli_sha256 }}
+        CLI_URL: ${{ inputs.cli_url }}
 
     - name: Run ironhide test
       id: test
@@ -78,15 +123,46 @@ runs:
         IRONHIDE_SAMPLES: ${{ inputs.runs }}
         BASELINE_LABEL: ${{ inputs.baseline_branch }}
         AGENT_ID: ${{ inputs.agent_id }}
+        ADAPTER: ${{ inputs.adapter }}
+        AGENT_FACTORY: ${{ inputs.agent_factory }}
+        IRONHIDE_REQUIRE_DRIVER: "true"
       run: |
-        set +e
         agent_args=()
-        [ -n "$AGENT_ID" ] && agent_args=(--agent-id "$AGENT_ID")
-        ironhide test "${agent_args[@]}" --label "$BASELINE_LABEL" 2>&1 | tee /tmp/ironhide-out.txt
+        [ -n "$AGENT_ID" ] && agent_args+=(--agent-id "$AGENT_ID")
+        [ -n "$ADAPTER" ] && agent_args+=(--adapter "$ADAPTER")
+        [ -n "$AGENT_FACTORY" ] && agent_args+=(--agent-factory "$AGENT_FACTORY")
+        output="$(mktemp "${RUNNER_TEMP:-/tmp}/ironhide-out.XXXXXX")"
+        trap 'rm -f "$output"' EXIT
+        set +e
+        ironhide test "${agent_args[@]}" --label "$BASELINE_LABEL" 2>&1 | tee "$output"
         code=${PIPESTATUS[0]}
         set -e
-        gate_line="$(grep -E '^IRONHIDE-GATE' /tmp/ironhide-out.txt | tail -1)"
-        result="$(printf '%s' "$gate_line" | grep -oE 'result=[A-Z_]+' | cut -d= -f2)"
+        gate_line="$(grep -E '^IRONHIDE-GATE ' "$output" | tail -1 || true)"
+        result="$(printf '%s' "$gate_line" | grep -oE '(^| )result=[A-Z_]+' | tail -1 | cut -d= -f2 || true)"
+        graded="$(printf '%s' "$gate_line" | grep -oE '(^| )graded=[0-9]+' | tail -1 | cut -d= -f2 || true)"
+        basis="$(printf '%s' "$gate_line" | grep -oE '(^| )basis=[A-Za-z0-9_-]+' | tail -1 | cut -d= -f2 || true)"
+        case "$result" in
+          PASS|FAIL|ADVISORY|BASELINE|UNAVAILABLE) ;;
+          *) result=UNAVAILABLE ;;
+        esac
+        # A missing gate line or unmeasured population is never green, even if
+        # an incompatible CLI returned zero. Advisory cannot suppress this.
+        if [ "$code" = 0 ] && { [ -z "$graded" ] || [ "$graded" = 0 ] || [ "$result" = UNAVAILABLE ] || [ -z "$result" ]; }; then
+          code=2
+          result=UNAVAILABLE
+          gate_line="IRONHIDE-GATE${basis:+ basis=$basis} result=UNAVAILABLE graded=0"
+          echo "::error::No eligible observations were graded. Set adapter to your agent and check the CLI release."
+        fi
+        # Customer code can print gate-shaped text. A nonzero CLI exit never
+        # supports a successful status in the output or PR comment.
+        case "$result" in
+          PASS|ADVISORY|BASELINE)
+            if [ "$code" != 0 ]; then
+              result=UNAVAILABLE
+              gate_line="IRONHIDE-GATE${basis:+ basis=$basis} result=UNAVAILABLE graded=0"
+            fi
+            ;;
+        esac
         echo "result=${result:-UNAVAILABLE}" >> "$GITHUB_OUTPUT"
         {
           echo "gate_line<<__EOF__"
@@ -94,6 +170,33 @@ runs:
           echo "__EOF__"
         } >> "$GITHUB_OUTPUT"
         echo "code=$code" >> "$GITHUB_OUTPUT"
+
+    # A gate that never gates must SAY SO. `result=BASELINE` exits 0 and reads
+    # like a green check, but it means "there was nothing to compare" — and a
+    # repo whose workflow only runs on pull_request never writes a baseline on
+    # the baseline branch, so every run of every PR lands here, forever, looking
+    # green. This annotation is the difference between a misconfiguration you
+    # find and one you ship on top of.
+    - name: Say so when this run did not gate
+      if: ${{ steps.test.outputs.result == 'BASELINE' }}
+      shell: bash
+      env:
+        BASELINE_BRANCH: ${{ inputs.baseline_branch }}
+        MATCHED: ${{ steps.restore.outputs.cache-matched-key }}
+      run: |
+        # One line: a workflow-command annotation is terminated by a newline.
+        msg="No baseline was restored for '${BASELINE_BRANCH}' (cache key matched: '${MATCHED:-none}'), so this run only RECORDED a baseline. Nothing was compared and nothing could have failed. Run this action on '${BASELINE_BRANCH}' itself (add a push trigger for that branch) so pull requests have a baseline to be judged against. Do not read BASELINE as 'nothing regressed'."
+        echo "::warning title=Ironhide did not gate this run::${msg}"
+        echo "$msg" >> "$GITHUB_STEP_SUMMARY"
+
+    # Only a successful push on the baseline branch may persist its baseline.
+    # A PR can restore it but must never replace the comparison standard.
+    - name: Refresh the Ironhide baseline
+      if: ${{ github.event_name == 'push' && github.ref_name == inputs.baseline_branch && steps.test.outputs.code == '0' }}
+      uses: actions/cache/save@v4
+      with:
+        path: .ironhide
+        key: ironhide-baseline-${{ inputs.baseline_branch }}-${{ github.run_id }}
 
     - name: Post the verdict on the PR
       if: ${{ inputs.comment == 'true' && github.event_name == 'pull_request' && always() }}
@@ -106,4 +209,7 @@ runs:
 
     - name: Enforce the gate
       shell: bash
-      run: exit ${{ steps.test.outputs.code }}
+      if: ${{ always() }}
+      env:
+        TEST_CODE: ${{ steps.test.outputs.code }}
+      run: exit "${TEST_CODE:-2}"

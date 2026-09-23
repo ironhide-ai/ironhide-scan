@@ -11,15 +11,28 @@ case "$RESULT" in
   PASS)         badge="✅ PASS" ;;
   WARN)         badge="⚠️ WARN" ;;
   INCONCLUSIVE) badge="◽ INCONCLUSIVE — unverified, not a pass" ;;
+  ADVISORY)     badge="⚠️ ADVISORY" ;;
   BASELINE)     badge="📌 BASELINE established" ;;
   FAIL)         badge="❌ FAIL" ;;
   BLOCK)        badge="🛑 BLOCK" ;;
   *)            badge="⏻ UNAVAILABLE" ;;
 esac
 
+case "$RESULT" in
+  FAIL|BLOCK) reason="Observed security results regressed against the saved baseline or met a configured blocking severity. Review the gate output and fix the agent before rerunning." ;;
+  PASS) reason="The measured security results passed comparison with the saved baseline." ;;
+  ADVISORY) reason="A security regression was observed; advisory mode reports it without blocking." ;;
+  BASELINE) reason="Eligible observations established a baseline. No comparison was made yet." ;;
+  *) reason="A security comparison was not available. Check the driver configuration and job log; this is not a pass." ;;
+esac
+
 body="$(cat <<EOF
 $MARKER
 ### Ironhide · $badge
+
+$reason
+
+Held-out episode details are masked.
 
 Observed-state verdict — graded on what your agent **did** in a sandboxed arena under attack, not on what it said. Preview basis \`arena-l3-preview\`.
 
