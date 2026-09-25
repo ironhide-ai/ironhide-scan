@@ -7,7 +7,7 @@ branding:
 
 inputs:
   api_key:
-    description: "Your agent's Ironhide API key. Always pass via ${{ secrets.IRONHIDE_API_KEY }} — never commit it."
+    description: "Your agent's Ironhide API key. Always pass it from a repository secret named IRONHIDE_API_KEY — never commit it."
     required: true
   agent_id:
     description: "The connected agent's id (from `ironhide connect`). Optional if the repo commits a .ironhide.yml carrying agent_id; otherwise set it here so a fresh CI checkout can resolve the agent."
