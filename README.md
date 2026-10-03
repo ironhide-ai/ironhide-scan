@@ -16,7 +16,7 @@ then turn gating on.
 Pin a release tag, not a moving alias:
 
 ```yaml
-- uses: ironhide-ai/ironhide-scan@v2.0.0
+- uses: ironhide-ai/ironhide-scan@v2.1.0
 ```
 
 Set the repository variable `IRONHIDE_CLI_SHA256` to the CLI SHA-256 published
@@ -64,7 +64,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4    # must come BEFORE the action
-      - uses: ironhide-ai/ironhide-scan@v2.0.0
+      - uses: ironhide-ai/ironhide-scan@v2.1.0
         with:
           api_key: ${{ secrets.IRONHIDE_API_KEY }}
           adapter: your.module:agent  # replace with your actual driver
@@ -128,6 +128,10 @@ so configure `adapter` or `agent_factory` explicitly before running this Action.
 | `baseline_branch` | `main` | The branch whose trailing clean rate is the baseline this PR is compared against. The first run **on** this branch records a baseline; an existing baseline is retained. Resetting it is a deliberate owner action, never an automatic CI refresh. |
 | `server` | `https://app.ironhideai.com` | Ironhide server base URL. |
 | `comment` | `true` | Post/update the verdict as a PR comment (needs `pull-requests: write`). |
+| `profile` | *(empty)* | `pr` or `full` coverage for the episode library (see Bounded PR coverage). |
+| `suite` | *(empty)* | `actions` or `library`; empty uses `.ironhide.yml` (see Action tests). |
+| `pack` | *(empty)* | Action-test scenario pack: `general`, `fsm`, `crm` or `erp`. |
+| `tools_file` | *(empty)* | Action tests: a JSON tool list for tools built at runtime. |
 
 ## Outputs
 
@@ -285,3 +289,92 @@ The local baseline is retained if the server reset fails, including when the
 server has no reset route or environment routing is disabled. Successful resets
 record the owner account or operator in the audit trail; older `agent:` audit
 rows do not identify a human.
+
+## Bounded PR coverage (`profile`)
+
+| input | default | what it does |
+| --- | --- | --- |
+| `profile` | *(empty)* | `pr` or `full`, passed to `ironhide test --profile`. Empty keeps the legacy coverage and baseline. |
+
+Set `profile: pr` and `runs: 3` in the
+Action's `with` block to request the bounded PR profile. Configure the same profile on the baseline branch so PRs
+have a compatible baseline. Leaving `profile` empty preserves the existing
+coverage and baseline behavior; upgrades do not silently select fewer episodes.
+
+For example, keep the quick-start workflow's **both** `pull_request` and
+`push: branches: [main]` triggers, then use these steps after checkout and installing your agent dependencies.
+Both steps pin the same release and CLI digest:
+
+```yaml
+- uses: ironhide-ai/ironhide-scan@v2.1.0
+  with:
+    api_key: ${{ secrets.IRONHIDE_API_KEY }}
+    adapter: your.module:agent  # replace with your actual driver
+    cli_sha256: ${{ vars.IRONHIDE_CLI_SHA256 }}
+    advisory_mode: false
+    profile: pr
+    runs: 3
+    baseline_branch: main
+- uses: ironhide-ai/ironhide-scan@v2.1.0
+  if: github.event_name == 'push' && github.ref_name == 'main'
+  with:
+    api_key: ${{ secrets.IRONHIDE_API_KEY }}
+    adapter: your.module:agent  # replace with your actual driver
+    cli_sha256: ${{ vars.IRONHIDE_CLI_SHA256 }}
+    advisory_mode: false
+    profile: full
+    runs: 3
+    baseline_branch: main
+```
+
+The first step establishes the `pr` baseline on its first main run, preserves
+that baseline in the cache, and compares subsequent runs against it. The second
+independently establishes and preserves the `full` baseline. Neither step
+automatically replaces an existing baseline or refreshes profile membership.
+Before a release, run `profile: full` against the release candidate using that
+same baseline branch and driver context; confirm a comparison occurred. Its
+first run may only establish a baseline. A workflow that runs only `full` on
+main leaves `pr` without a baseline and cannot gate those PR runs.
+
+Use `profile: full` before a release and for scheduled full sweeps. Full means
+the complete **routed** population: unsupported runner channels still appear
+as NOT RUN. Keep a separate baseline-branch run for each profile you use; a
+`full` baseline cannot supply the comparison for `pr`.
+
+The equivalent CLI choices are `ironhide test --profile pr` and
+`ironhide test --profile full`, with your usual driver arguments. The CLI
+prints the chosen coverage and omitted counts before running. The gate line
+and PR comment retain `profile=pr|full` and `profile_omitted=N`; total `not_run`
+includes profile omissions. NOT RUN is not a pass and is excluded from the
+gate's selected population. A server that cannot support a requested profile
+must refuse it; do not remove the option to silently retry with different coverage.
+
+Explicit-profile baselines live under
+`.ironhide/profiles-v1/<context-sha>.json`, scoped by server, agent, label and
+profile context. The Action caches `.ironhide` using separate `pr`, `full` and
+legacy namespaces. Establish the first baseline for each explicit profile;
+the first run reports `BASELINE`, which means no comparison took place.
+`--profile` with `--rebaseline` currently refuses: profile-only refresh is tracked
+in [CRU-157](https://linear.app/ironhide-services/issue/CRU-157).
+
+This opt-in wiring does not establish a five-minute runner budget, security
+representativeness, or held-out secrecy approval. Those require the separate
+reference-runner measurements and policy review; no speed claim is made here.
+
+## Action tests
+
+Action tests are new in v2.1.0. They test what your agent *does* (send, pay,
+change, delete, grant, remember, run code) using its own tool list. Three inputs
+control them, all optional; an empty value defers to `.ironhide.yml`.
+
+| input | default | what it does |
+| --- | --- | --- |
+| `suite` | *(empty)* | `actions` tests what your agent does (send, pay, change, delete, grant, remember, run code...) with your own tool list; `library` is the episode library. |
+| `pack` | *(empty)* | The scenario pack for action tests: `general`, `fsm`, `crm` or `erp`. |
+| `tools_file` | *(empty)* | A JSON tool list for tools built at runtime: an MCP `tools/list` result, OpenAI function schemas, or `{name, params}` rows. |
+
+Action tests save `.ironhide/actions-suite-<label>.json` on the baseline
+branch's first run. The cached `.ironhide/` directory carries it to pull
+requests, which then re-run those tests on fresh instances and gate with
+`basis=action-preview`. The gate line keeps the same `result=` and `graded=`
+fields this Action reads.

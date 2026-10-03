@@ -27,7 +27,7 @@ inputs:
   cli_url:
     description: "Where the verified CLI is fetched from. Defaults to the immutable release asset that ships with this Action version, so the pinned cli_sha256 stays valid for the life of the tag. Point it elsewhere only if you mirror the asset internally — a live server path would change under you on every Ironhide deploy and break this gate."
     required: false
-    default: "https://github.com/ironhide-ai/ironhide-scan/releases/download/v2.0.0/ironhide.py"
+    default: "https://github.com/ironhide-ai/ironhide-scan/releases/download/v2.1.0/ironhide.py"
   advisory_mode:
     description: "true (default) reports security regressions without failing; configuration and unavailable results still fail. Set false to gate: a FAIL, or a BLOCK per block_on, fails the build."
     required: false
@@ -37,7 +37,23 @@ inputs:
     required: false
     default: "exfiltration"
   runs:
-    description: "Samples per episode. Empty = project configuration or CLI default."
+    description: "Samples per episode. Empty = project configuration or CLI default. A profile selects WHICH episodes run; it does not change how many samples each one gets."
+    required: false
+    default: ""
+  profile:
+    description: "Optional coverage profile: pr (bounded selection) or full (complete routed population). Empty preserves legacy coverage and the baselines already recorded against it."
+    required: false
+    default: ""
+  suite:
+    description: "actions (agent-action tests built from your agent's own tool list) or library (the episode library). Empty uses .ironhide.yml suite."
+    required: false
+    default: ""
+  pack:
+    description: "Action tests: the scenario pack - general, fsm, crm or erp. Empty uses .ironhide.yml pack."
+    required: false
+    default: ""
+  tools_file:
+    description: "Action tests: a JSON tool list (MCP tools/list, OpenAI function schemas, or name/params rows) for tools built at runtime. Empty uses .ironhide.yml tools_file, then discovery."
     required: false
     default: ""
   baseline_branch:
@@ -100,9 +116,9 @@ runs:
       uses: actions/cache/restore@v4
       with:
         path: .ironhide
-        key: ironhide-baseline-${{ inputs.baseline_branch }}-${{ github.run_id }}
+        key: ironhide-baseline-${{ inputs.profile != '' && format('profile-{0}-', inputs.profile) || '' }}${{ inputs.baseline_branch }}-${{ github.run_id }}
         restore-keys: |
-          ironhide-baseline-${{ inputs.baseline_branch }}-
+          ironhide-baseline-${{ inputs.profile != '' && format('profile-{0}-', inputs.profile) || '' }}${{ inputs.baseline_branch }}-
 
     - name: Install the Ironhide CLI
       shell: bash
@@ -121,6 +137,10 @@ runs:
         IRONHIDE_ADVISORY: ${{ inputs.advisory_mode }}
         IRONHIDE_BLOCK_ON: ${{ inputs.block_on }}
         IRONHIDE_SAMPLES: ${{ inputs.runs }}
+        IRONHIDE_PROFILE: ${{ inputs.profile }}
+        IRONHIDE_SUITE: ${{ inputs.suite }}
+        IRONHIDE_PACK: ${{ inputs.pack }}
+        IRONHIDE_TOOLS: ${{ inputs.tools_file }}
         BASELINE_LABEL: ${{ inputs.baseline_branch }}
         AGENT_ID: ${{ inputs.agent_id }}
         ADAPTER: ${{ inputs.adapter }}
@@ -131,10 +151,12 @@ runs:
         [ -n "$AGENT_ID" ] && agent_args+=(--agent-id "$AGENT_ID")
         [ -n "$ADAPTER" ] && agent_args+=(--adapter "$ADAPTER")
         [ -n "$AGENT_FACTORY" ] && agent_args+=(--agent-factory "$AGENT_FACTORY")
+        profile_args=()
+        [ -n "$IRONHIDE_PROFILE" ] && profile_args+=(--profile "$IRONHIDE_PROFILE")
         output="$(mktemp "${RUNNER_TEMP:-/tmp}/ironhide-out.XXXXXX")"
         trap 'rm -f "$output"' EXIT
         set +e
-        ironhide test "${agent_args[@]}" --label "$BASELINE_LABEL" 2>&1 | tee "$output"
+        ironhide test "${agent_args[@]}" "${profile_args[@]}" --label "$BASELINE_LABEL" 2>&1 | tee "$output"
         code=${PIPESTATUS[0]}
         set -e
         gate_line="$(grep -E '^IRONHIDE-GATE ' "$output" | tail -1 || true)"
@@ -196,7 +218,7 @@ runs:
       uses: actions/cache/save@v4
       with:
         path: .ironhide
-        key: ironhide-baseline-${{ inputs.baseline_branch }}-${{ github.run_id }}
+        key: ironhide-baseline-${{ inputs.profile != '' && format('profile-{0}-', inputs.profile) || '' }}${{ inputs.baseline_branch }}-${{ github.run_id }}
 
     - name: Post the verdict on the PR
       if: ${{ inputs.comment == 'true' && github.event_name == 'pull_request' && always() }}
