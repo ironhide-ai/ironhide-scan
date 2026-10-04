@@ -1,7 +1,7 @@
 # Ironhide Scan — GitHub Action
 
-<!-- Last updated: 2026-09-02 (every input, output, env var and exit code below
-     verified against action.yml and the CLI). -->
+<!-- Last updated: 2026-10-03 (v2.2.0: advisory_pass; every input, output, env
+     var and exit code below verified against action.yml and the CLI). -->
 
 Pull the agent your PR builds into a sandboxed arena, attack it, and post a
 categorical **observed-state verdict** on what the agent *did* — state changes,
@@ -16,7 +16,7 @@ then turn gating on.
 Pin a release tag, not a moving alias:
 
 ```yaml
-- uses: ironhide-ai/ironhide-scan@v2.1.0
+- uses: ironhide-ai/ironhide-scan@v2.2.0
 ```
 
 Set the repository variable `IRONHIDE_CLI_SHA256` to the CLI SHA-256 published
@@ -64,7 +64,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4    # must come BEFORE the action
-      - uses: ironhide-ai/ironhide-scan@v2.1.0
+      - uses: ironhide-ai/ironhide-scan@v2.2.0
         with:
           api_key: ${{ secrets.IRONHIDE_API_KEY }}
           adapter: your.module:agent  # replace with your actual driver
@@ -105,7 +105,8 @@ See [GitHub's guidance](https://docs.github.com/en/actions/reference/security/se
 
 The server must enable environment routing (`IRONHIDE_ENV_ROUTING`) so the CLI
 emits its measured `graded=` count. A missing count, including with routing off,
-fails closed with exit 2 even in advisory mode. An unavailable gate retains its
+fails closed with exit 2 even in advisory mode, unless the CLI itself declared
+an advisory pass (`advisory_pass=true`, see below). An unavailable gate retains its
 reported `basis=` token when present; it does not invent one if absent.
 
 In `.ironhide.yml`, driver values use the CLI's simple unquoted `key: value`
@@ -122,7 +123,7 @@ so configure `adapter` or `agent_factory` explicitly before running this Action.
 | `adapter` | from `.ironhide.yml` | Customer driver as `module:object`, passed to `--adapter`. |
 | `agent_factory` | from `.ironhide.yml` | Tool-binding factory, passed to `--agent-factory`; exclusive with `adapter`. |
 | `cli_sha256` | **required** | SHA-256 of the approved CLI release; verified before execution. |
-| `advisory_mode` | `true` | `true` reports security regressions without blocking; configuration and unavailable results still fail, except a server-side outage that is not your agent's fault (run quota spent, or action tests off on the server): that is reported as `UNAVAILABLE` with a warning and exits 0. `false` gates: FAIL, BLOCK per `block_on`, and any UNAVAILABLE fail the build. |
+| `advisory_mode` | `true` | `true` reports security regressions without blocking. An `UNAVAILABLE` the CLI marks `advisory_pass=true` - the evidence could not decide (an unconfirmed rise, a baseline too small to compare, a run left unverified by rate limits, a server-side outage) - is reported as NOT DECIDED with a warning and exits 0; it is never a pass. Configuration and setup failures still fail. `false` gates: FAIL, BLOCK per `block_on`, and any UNAVAILABLE fail the build. |
 | `block_on` | `exfiltration` | Comma-separated effect categories that hard-block without statistics when `advisory_mode: false`. Add `inconclusive` if unverified runs must not merge. |
 | `runs` | suite default | Samples per episode; passed as `IRONHIDE_SAMPLES`. |
 | `baseline_branch` | `main` | The branch whose trailing clean rate is the baseline this PR is compared against. The first run **on** this branch records a baseline; an existing baseline is retained. Resetting it is a deliberate owner action, never an automatic CI refresh. |
@@ -164,7 +165,7 @@ own, shorter vocabulary:
 | `FAIL` | Clean rate fell versus baseline past the noise floor — a statistical regression over the sweep, not one bad episode. Only returned when `advisory_mode: false`. |
 | `ADVISORY` | What would have been a `FAIL`, reported without breaking the build because `advisory_mode: true`. Exit 0. |
 | `BASELINE` | First run for this label; this run set became the baseline. Nothing to compare yet. Exit 0. |
-| `UNAVAILABLE` | The gate could not be evaluated. Exit 2 — never rounded to a pass or a failure. One exception: with `advisory_mode: true`, a server-side outage (`reason=run_quota_exceeded` or `reason=action_envs_disabled` on the gate line) exits 0 with a warning — nothing was tested, and the result still says `UNAVAILABLE`. |
+| `UNAVAILABLE` | Not decided: the gate could not be evaluated. Never rounded to a pass or a failure. Exit 2 — except with `advisory_mode: true` when the CLI marks it `advisory_pass=true` (the evidence could not decide; see the table below): exit 0 with a warning and a PR comment that say **NOT DECIDED** and why; the result still says `UNAVAILABLE`. A setup failure you have to fix exits 2 in both modes. |
 
 ## The gate line & exit codes
 
@@ -181,11 +182,29 @@ The core fields are: `basis` (always
 `basis=arena-l3-preview` to tell this line apart from any other gate line in
 your log.
 
+An `UNAVAILABLE` line also carries `reason=<why>` and `advisory=<true|false>`,
+and - only in advisory mode, only when the CLI exits 0 - `advisory_pass=true`:
+
+```
+IRONHIDE-GATE basis=statistical delta=+0 noise_floor=0.05 n=21 result=UNAVAILABLE graded=7 unverified=0 not_run=0 reason=unconfirmed advisory=true advisory_pass=true
+```
+
+The CLI decides which reasons advisory mode may let through and declares it on
+the line, so a new reason never needs a new Action release. This Action honours
+`advisory_pass=true` (plus `reason=run_quota_exceeded` / `action_envs_disabled`
+from older CLIs); any other `UNAVAILABLE` fails.
+
+| `reason` | advisory mode | why |
+| --- | --- | --- |
+| `unconfirmed`, `baseline_too_small`, `unverified`, `rate_limited`, `not_comparable` | exit 0, `advisory_pass=true`, NOT DECIDED | the evidence could not decide |
+| `run_quota_exceeded`, `action_envs_disabled` | exit 0, `advisory_pass=true`, NOT DECIDED | an outage on Ironhide's side; nothing ran |
+| `agent_failed_every_episode`, `nothing_graded`, `no_tests`, `no_eligible_runs`, `baseline_unreadable`, `baseline_empty`, `runs_malformed`, `pin_unknown`, `profile_identity_mismatch`, `profile_policy_mismatch`, `gate_no_result`, or a reason the CLI does not know | exit 2 | something you have to fix |
+
 | code | meaning |
 | --- | --- |
-| `0` | `PASS`, `ADVISORY`, `BASELINE` — i.e. any result while `advisory_mode: true`, and a baseline-establishing run. |
+| `0` | `PASS`, `ADVISORY`, `BASELINE` — i.e. any decided result while `advisory_mode: true`, and a baseline-establishing run; with `advisory_mode: true`, also an `UNAVAILABLE` marked `advisory_pass=true` (NOT DECIDED, never a pass). |
 | `1` | `FAIL` (which the server returns only when `advisory_mode: false`; `block_on` categories fail through the same code). |
-| `2` | Ironhide unavailable — reported, never silently passed (advisory mode excepts a server-side outage, see `UNAVAILABLE`). |
+| `2` | `UNAVAILABLE` / `REBASELINE_REQUIRED` — reported, never silently passed. With `advisory_mode: false`, every `UNAVAILABLE`; in advisory mode, a setup failure you have to fix. |
 
 ## How it works
 
@@ -306,7 +325,7 @@ For example, keep the quick-start workflow's **both** `pull_request` and
 Both steps pin the same release and CLI digest:
 
 ```yaml
-- uses: ironhide-ai/ironhide-scan@v2.1.0
+- uses: ironhide-ai/ironhide-scan@v2.2.0
   with:
     api_key: ${{ secrets.IRONHIDE_API_KEY }}
     adapter: your.module:agent  # replace with your actual driver
@@ -315,7 +334,7 @@ Both steps pin the same release and CLI digest:
     profile: pr
     runs: 3
     baseline_branch: main
-- uses: ironhide-ai/ironhide-scan@v2.1.0
+- uses: ironhide-ai/ironhide-scan@v2.2.0
   if: github.event_name == 'push' && github.ref_name == 'main'
   with:
     api_key: ${{ secrets.IRONHIDE_API_KEY }}
@@ -376,5 +395,7 @@ control them, all optional; an empty value defers to `.ironhide.yml`.
 Action tests save `.ironhide/actions-suite-<label>.json` on the baseline
 branch's first run. The cached `.ironhide/` directory carries it to pull
 requests, which then re-run those tests on fresh instances and gate with
-`basis=action-preview`. The gate line keeps the same `result=` and `graded=`
-fields this Action reads.
+`basis=statistical`: a test fails the gate only when its breach rate rose
+against the baseline's counts and that held on a re-run, or when a critical
+action the baseline never saw happened. The gate line keeps the same
+`result=` and `graded=` fields this Action reads.
