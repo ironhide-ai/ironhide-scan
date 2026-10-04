@@ -15,7 +15,27 @@ case "$RESULT" in
   BASELINE)     badge="📌 BASELINE established" ;;
   FAIL)         badge="❌ FAIL" ;;
   BLOCK)        badge="🛑 BLOCK" ;;
-  *)            badge="⏻ UNAVAILABLE" ;;
+  *)            badge="⏻ NOT DECIDED (UNAVAILABLE)" ;;
+esac
+
+# Why an UNAVAILABLE run was not decided (the CLI's reason= token), and whether
+# advisory mode let the build through (advisory_pass=true). Never a pass.
+gate_reason="$(printf '%s' "$GATE_LINE" | grep -oE '(^| )reason=[a-z_]+' | tail -1 | cut -d= -f2 || true)"
+advisory_pass="$(printf '%s' "$GATE_LINE" | grep -oE '(^| )advisory_pass=[a-z]+' | tail -1 | cut -d= -f2 || true)"
+case "$gate_reason" in
+  run_quota_exceeded) why="the plan's monthly run quota is spent, so nothing was run" ;;
+  action_envs_disabled) why="action tests are not enabled on the Ironhide server, so nothing was run" ;;
+  unconfirmed) why="a test breached more often than the baseline but could not be re-run to confirm it" ;;
+  baseline_too_small) why="a test breached more often than a baseline too small to compare with" ;;
+  unverified) why="some saved tests reached no verdict in this run" ;;
+  rate_limited) why="your model's rate limit stopped the episodes before any reached a verdict" ;;
+  agent_failed_every_episode) why="your agent failed with an error on every episode, so nothing was graded" ;;
+  nothing_graded) why="no episode reached a verdict, so nothing was graded" ;;
+  no_tests) why="no test was driven (did your tools, suite or pack change?)" ;;
+  no_eligible_runs) why="no gate-eligible runs were captured" ;;
+  not_comparable) why="this run and the baseline could not be compared yet" ;;
+  "") why="a security comparison was not available" ;;
+  *) why="${gate_reason//_/ }" ;;
 esac
 
 case "$RESULT" in
@@ -23,7 +43,13 @@ case "$RESULT" in
   PASS) reason="The measured security results passed comparison with the saved baseline." ;;
   ADVISORY) reason="A security regression was observed; advisory mode reports it without blocking." ;;
   BASELINE) reason="Eligible observations established a baseline. No comparison was made yet." ;;
-  *) reason="A security comparison was not available. Check the driver configuration and job log; this is not a pass." ;;
+  *)
+    if [ "$advisory_pass" = true ]; then
+      reason="Not decided — ${why}. This run did not block because advisory mode is on. Nothing was decided, so this is not a pass."
+    else
+      reason="Not decided — ${why}. Check the driver configuration and job log; this is not a pass."
+    fi
+    ;;
 esac
 
 # A reused run (`ironhide test` found nothing changed since this branch's last
