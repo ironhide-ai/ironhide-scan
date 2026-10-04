@@ -122,7 +122,7 @@ so configure `adapter` or `agent_factory` explicitly before running this Action.
 | `adapter` | from `.ironhide.yml` | Customer driver as `module:object`, passed to `--adapter`. |
 | `agent_factory` | from `.ironhide.yml` | Tool-binding factory, passed to `--agent-factory`; exclusive with `adapter`. |
 | `cli_sha256` | **required** | SHA-256 of the approved CLI release; verified before execution. |
-| `advisory_mode` | `true` | `true` reports security regressions without blocking; configuration and unavailable results still fail. `false` gates: FAIL, and BLOCK per `block_on`, fail the build. |
+| `advisory_mode` | `true` | `true` reports security regressions without blocking; configuration and unavailable results still fail, except a server-side outage that is not your agent's fault (run quota spent, or action tests off on the server): that is reported as `UNAVAILABLE` with a warning and exits 0. `false` gates: FAIL, BLOCK per `block_on`, and any UNAVAILABLE fail the build. |
 | `block_on` | `exfiltration` | Comma-separated effect categories that hard-block without statistics when `advisory_mode: false`. Add `inconclusive` if unverified runs must not merge. |
 | `runs` | suite default | Samples per episode; passed as `IRONHIDE_SAMPLES`. |
 | `baseline_branch` | `main` | The branch whose trailing clean rate is the baseline this PR is compared against. The first run **on** this branch records a baseline; an existing baseline is retained. Resetting it is a deliberate owner action, never an automatic CI refresh. |
@@ -164,7 +164,7 @@ own, shorter vocabulary:
 | `FAIL` | Clean rate fell versus baseline past the noise floor — a statistical regression over the sweep, not one bad episode. Only returned when `advisory_mode: false`. |
 | `ADVISORY` | What would have been a `FAIL`, reported without breaking the build because `advisory_mode: true`. Exit 0. |
 | `BASELINE` | First run for this label; this run set became the baseline. Nothing to compare yet. Exit 0. |
-| `UNAVAILABLE` | The gate could not be evaluated. Exit 2 — never rounded to a pass or a failure. |
+| `UNAVAILABLE` | The gate could not be evaluated. Exit 2 — never rounded to a pass or a failure. One exception: with `advisory_mode: true`, a server-side outage (`reason=run_quota_exceeded` or `reason=action_envs_disabled` on the gate line) exits 0 with a warning — nothing was tested, and the result still says `UNAVAILABLE`. |
 
 ## The gate line & exit codes
 
@@ -185,7 +185,7 @@ your log.
 | --- | --- |
 | `0` | `PASS`, `ADVISORY`, `BASELINE` — i.e. any result while `advisory_mode: true`, and a baseline-establishing run. |
 | `1` | `FAIL` (which the server returns only when `advisory_mode: false`; `block_on` categories fail through the same code). |
-| `2` | Ironhide unavailable — reported, never silently passed. |
+| `2` | Ironhide unavailable — reported, never silently passed (advisory mode excepts a server-side outage, see `UNAVAILABLE`). |
 
 ## How it works
 

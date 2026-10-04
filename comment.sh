@@ -26,6 +26,19 @@ case "$RESULT" in
   *) reason="A security comparison was not available. Check the driver configuration and job log; this is not a pass." ;;
 esac
 
+# A reused run (`ironhide test` found nothing changed since this branch's last
+# graded run) drove nothing: say so plainly instead of "passed comparison".
+reused="$(printf '%s' "$GATE_LINE" | grep -oE '(^| )reused=[0-9a-f]{1,40}' | tail -1 | cut -d= -f2 || true)"
+if [ -n "$reused" ]; then
+  case "$RESULT" in
+    PASS) outcome="It passed when it ran." ;;
+    FAIL|BLOCK) outcome="It failed when it ran - the failure still stands." ;;
+    ADVISORY) outcome="It showed a regression when it ran (advisory: not blocking)." ;;
+    *) outcome="" ;;
+  esac
+  reason="Unchanged since ${reused:0:7} — previous result reused, not re-run. Nothing that decides the result changed since that commit's run, so its result stands for this one. ${outcome}"
+fi
+
 body="$(cat <<EOF
 $MARKER
 ### Ironhide · $badge

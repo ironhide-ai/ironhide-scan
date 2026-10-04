@@ -29,7 +29,7 @@ inputs:
     required: false
     default: "https://github.com/ironhide-ai/ironhide-scan/releases/download/v2.1.0/ironhide.py"
   advisory_mode:
-    description: "true (default) reports security regressions without failing; configuration and unavailable results still fail. Set false to gate: a FAIL, or a BLOCK per block_on, fails the build."
+    description: "true (default) reports security regressions without failing; configuration and unavailable results still fail, except a server-side outage that is not your agent's fault (the run quota is spent, or action tests are off on the server), which is reported as UNAVAILABLE with a warning and does not fail the build. Set false to gate: a FAIL, a BLOCK per block_on, or any UNAVAILABLE fails the build."
     required: false
     default: "true"
   block_on:
@@ -163,13 +163,22 @@ runs:
         result="$(printf '%s' "$gate_line" | grep -oE '(^| )result=[A-Z_]+' | tail -1 | cut -d= -f2 || true)"
         graded="$(printf '%s' "$gate_line" | grep -oE '(^| )graded=[0-9]+' | tail -1 | cut -d= -f2 || true)"
         basis="$(printf '%s' "$gate_line" | grep -oE '(^| )basis=[A-Za-z0-9_-]+' | tail -1 | cut -d= -f2 || true)"
+        reason="$(printf '%s' "$gate_line" | grep -oE '(^| )reason=[a-z_]+' | tail -1 | cut -d= -f2 || true)"
         case "$result" in
           PASS|FAIL|ADVISORY|BASELINE|UNAVAILABLE) ;;
           *) result=UNAVAILABLE ;;
         esac
+        advisory="$(printf '%s' "$IRONHIDE_ADVISORY" | tr '[:upper:]' '[:lower:]')"
+        # A server-side outage that is not the agent's fault (the run quota is
+        # spent, or action tests are off on the server): the CLI exits 0 only in
+        # advisory mode. Still UNAVAILABLE - never a pass - and said out loud.
+        if [ "$code" = 0 ] && [ "$result" = UNAVAILABLE ] \
+            && { [ "$reason" = run_quota_exceeded ] || [ "$reason" = action_envs_disabled ]; } \
+            && { [ "$advisory" = true ] || [ "$advisory" = 1 ] || [ "$advisory" = yes ] || [ "$advisory" = on ]; }; then
+          echo "::warning title=Ironhide did not test this change::The Ironhide server could not run this change ($reason). advisory_mode does not fail the build for a server-side outage, but NOTHING was tested - this is not a pass."
         # A missing gate line or unmeasured population is never green, even if
         # an incompatible CLI returned zero. Advisory cannot suppress this.
-        if [ "$code" = 0 ] && { [ -z "$graded" ] || [ "$graded" = 0 ] || [ "$result" = UNAVAILABLE ] || [ -z "$result" ]; }; then
+        elif [ "$code" = 0 ] && { [ -z "$graded" ] || [ "$graded" = 0 ] || [ "$result" = UNAVAILABLE ] || [ -z "$result" ]; }; then
           code=2
           result=UNAVAILABLE
           gate_line="IRONHIDE-GATE${basis:+ basis=$basis} result=UNAVAILABLE graded=0"
