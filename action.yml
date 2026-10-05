@@ -27,7 +27,7 @@ inputs:
   cli_url:
     description: "Where the verified CLI is fetched from. Defaults to the immutable release asset that ships with this Action version, so the pinned cli_sha256 stays valid for the life of the tag. Point it elsewhere only if you mirror the asset internally — a live server path would change under you on every Ironhide deploy and break this gate."
     required: false
-    default: "https://github.com/ironhide-ai/ironhide-scan/releases/download/v2.2.0/ironhide.py"
+    default: "https://github.com/ironhide-ai/ironhide-scan/releases/download/v2.3.0/ironhide.py"
   advisory_mode:
     description: "true (default) reports security regressions without failing. An UNAVAILABLE result the CLI marks advisory_pass=true - the evidence could not decide (an unconfirmed rise, a baseline too small to compare, a run left unverified by rate limits, a server-side outage) - is reported as NOT DECIDED with a warning and does not fail the build; it is never a pass. Configuration and setup failures (bad config or key, an agent that failed on every episode, nothing graded) still fail. Set false to gate: a FAIL, a BLOCK per block_on, or any UNAVAILABLE fails the build."
     required: false
@@ -160,6 +160,18 @@ runs:
         code=${PIPESTATUS[0]}
         set -e
         gate_line="$(grep -E '^IRONHIDE-GATE ' "$output" | tail -1 || true)"
+        # The CLI's plain-language "what the agent did" block, for the PR
+        # comment (comment.sh shows it as literal text, capped). Already in this
+        # job's log; absent from older CLIs, and then the comment omits it.
+        details="${RUNNER_TEMP:-/tmp}/ironhide-details.txt"
+        esc="$(printf '\033')"
+        sed "s/${esc}\[[0-9;]*m//g" "$output" \
+          | awk '/^failures - what the agent did:/{f=1; next}
+                 f && /^[[:space:]]*$/{gap=1; next}
+                 f && gap && !/^  [A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9._-]+$/ && !/^    /{exit}
+                 f {gap=0; print}' \
+          | head -n 80 > "$details" || true
+        echo "details_file=$details" >> "$GITHUB_OUTPUT"
         result="$(printf '%s' "$gate_line" | grep -oE '(^| )result=[A-Z_]+' | tail -1 | cut -d= -f2 || true)"
         graded="$(printf '%s' "$gate_line" | grep -oE '(^| )graded=[0-9]+' | tail -1 | cut -d= -f2 || true)"
         basis="$(printf '%s' "$gate_line" | grep -oE '(^| )basis=[A-Za-z0-9_-]+' | tail -1 | cut -d= -f2 || true)"
@@ -226,7 +238,18 @@ runs:
       env:
         BASELINE_BRANCH: ${{ inputs.baseline_branch }}
         MATCHED: ${{ steps.restore.outputs.cache-matched-key }}
+        EVENT_NAME: ${{ github.event_name }}
+        REF_NAME: ${{ github.ref_name }}
       run: |
+        # A push to the baseline branch with no baseline yet is the setup
+        # working as intended: it records the first baseline. Telling it to
+        # "add a push trigger" (it has one) is wrong - say what happened.
+        if [ "$EVENT_NAME" = push ] && [ "$REF_NAME" = "$BASELINE_BRANCH" ]; then
+          msg="No baseline was restored on '${BASELINE_BRANCH}', so this run RECORDED the baseline that pull requests will be compared against. Nothing was compared on this run."
+          echo "::notice title=Ironhide recorded a baseline::${msg}"
+          echo "$msg" >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+        fi
         # One line: a workflow-command annotation is terminated by a newline.
         msg="No baseline was restored for '${BASELINE_BRANCH}' (cache key matched: '${MATCHED:-none}'), so this run only RECORDED a baseline. Nothing was compared and nothing could have failed. Run this action on '${BASELINE_BRANCH}' itself (add a push trigger for that branch) so pull requests have a baseline to be judged against. Do not read BASELINE as 'nothing regressed'."
         echo "::warning title=Ironhide did not gate this run::${msg}"
@@ -248,6 +271,7 @@ runs:
         GH_TOKEN: ${{ github.token }}
         RESULT: ${{ steps.test.outputs.result }}
         GATE_LINE: ${{ steps.test.outputs.gate_line }}
+        DETAILS_FILE: ${{ steps.test.outputs.details_file }}
       run: ${{ github.action_path }}/comment.sh
 
     - name: Enforce the gate
