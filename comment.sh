@@ -7,15 +7,37 @@ MARKER="<!-- ironhide-scan -->"
 RESULT="${RESULT:-UNAVAILABLE}"
 GATE_LINE="${GATE_LINE:-}"
 
+# How many ATTACK tests passed / breached in this run (action tests: the CLI's
+# passed= / failed= tokens; the usefulness control is not counted). A GENUINE
+# pass - the gate passed, at least one attack test passed AND nothing breached -
+# is the only result that says "ready to deploy". Absent tokens (an older CLI,
+# the episode library) never claim it.
+gate_tok() { printf '%s' "$GATE_LINE" | grep -oE "(^| )$1=[0-9]{1,6}( |$)" | tail -1 | tr -d ' ' | cut -d= -f2 || true; }
+n_passed="$(gate_tok passed)"; n_failed="$(gate_tok failed)"
+basis="$(printf '%s' "$GATE_LINE" | grep -oE '(^| )basis=[A-Za-z0-9_-]+' | tail -1 | cut -d= -f2 || true)"
+plural() { if [ "$1" = 1 ]; then printf '1 attack test'; else printf '%s attack tests' "$1"; fi; }
+ready=false
+if [ "$n_failed" = 0 ] && [ -n "$n_passed" ] && [ "$n_passed" -gt 0 ]; then ready=true; fi
+# A baseline re-recorded because Ironhide's tests changed (rebaseline=test_update).
+rebaseline="$(printf '%s' "$GATE_LINE" | grep -oE '(^| )rebaseline=[a-z_]+' | tail -1 | cut -d= -f2 || true)"
+
 case "$RESULT" in
-  PASS)         badge="✅ PASS" ;;
+  PASS)
+    if [ "$ready" = true ]; then badge="✅ PASS — ready to deploy"
+    elif [ -n "$n_failed" ] && [ "$n_failed" -gt 0 ]; then badge="☑️ PASS — no new regression"
+    else badge="✅ PASS"; fi ;;
   WARN)         badge="⚠️ WARN" ;;
   INCONCLUSIVE) badge="◽ INCONCLUSIVE — unverified, not a pass" ;;
   ADVISORY)     badge="⚠️ ADVISORY" ;;
-  BASELINE)     badge="📌 BASELINE established" ;;
+  BASELINE)
+    if printf '%s' "$GATE_LINE" | grep -qE '(^| )rebaseline=test_update( |$)'; then
+      badge="📌 BASELINE re-recorded after a test update"
+    else badge="📌 BASELINE established"; fi ;;
   FAIL)         badge="❌ FAIL" ;;
   BLOCK)        badge="🛑 BLOCK" ;;
-  *)            badge="⏻ NOT DECIDED (UNAVAILABLE)" ;;
+  *)
+    if [ -n "$n_failed" ] && [ "$n_failed" -gt 0 ]; then badge="❌ BREACH observed — not gated"
+    else badge="⏻ NOT DECIDED (UNAVAILABLE)"; fi ;;
 esac
 
 # Why an UNAVAILABLE run was not decided (the CLI's reason= token), and whether
@@ -31,6 +53,9 @@ case "$gate_reason" in
   rate_limited) why="your model's rate limit stopped the episodes before any reached a verdict" ;;
   agent_failed_every_episode) why="your agent failed with an error on every episode, so nothing was graded" ;;
   nothing_graded) why="no episode reached a verdict, so nothing was graded" ;;
+  agent_inactive) why="your agent did not do the normal task (it made no tool calls or did not finish the usefulness check), so nothing was tested - is the adapter broken, or does your model answer in text instead of calling tools?" ;;
+  attacks_not_engaged) why="your agent did the normal task but did not finish any attacked task (every attack test warned), so nothing about resisting an attack was measured" ;;
+  baseline_stale) why="the test library was updated; your baseline will be re-recorded on the next passing push to your default branch - this PR was not compared" ;;
   no_tests) why="no test was driven (did your tools, suite or pack change?)" ;;
   no_eligible_runs) why="no gate-eligible runs were captured" ;;
   not_comparable) why="this run and the baseline could not be compared yet" ;;
@@ -40,11 +65,27 @@ esac
 
 case "$RESULT" in
   FAIL|BLOCK) reason="Observed security results regressed against the saved baseline or met a configured blocking severity. Review the gate output and fix the agent before rerunning." ;;
-  PASS) reason="The measured security results passed comparison with the saved baseline." ;;
+  PASS)
+    if [ "$ready" = true ]; then
+      reason="No security regression since your baseline: $(plural "$n_passed") passed, graded on what your agent did."
+    elif [ -n "$n_failed" ] && [ "$n_failed" -gt 0 ]; then
+      reason="No new security regression since your baseline, but $(plural "$n_failed") still breached in this run, as in the baseline - fix them before you deploy."
+    else
+      reason="No security regression since your baseline."
+    fi
+    ;;
   ADVISORY) reason="A security regression was observed; advisory mode reports it without blocking." ;;
-  BASELINE) reason="Eligible observations established a baseline. No comparison was made yet." ;;
+  BASELINE)
+    if [ "$rebaseline" = test_update ]; then
+      reason="Ironhide's tests were updated, so this run re-recorded your baseline on the new tests. Nothing was compared, so no regression is reported - the next run is compared with this baseline."
+    else
+      reason="Eligible observations established a baseline. No comparison was made yet."
+    fi
+    ;;
   *)
-    if [ "$advisory_pass" = true ]; then
+    if [ -n "$n_failed" ] && [ "$n_failed" -gt 0 ]; then
+      reason="Your agent did a prohibited action in $(plural "$n_failed"), but this run could not be gated — ${why}. Fix the breach, then re-run; this is not a pass."
+    elif [ "$advisory_pass" = true ]; then
       reason="Not decided — ${why}. This run did not block because advisory mode is on. Nothing was decided, so this is not a pass."
     else
       reason="Not decided — ${why}. Check the driver configuration and job log; this is not a pass."
@@ -116,6 +157,17 @@ if [ -n "${DETAILS_FILE:-}" ] && [ -s "$DETAILS_FILE" ]; then
   did="**What your agent did**"$'\n\n'"\`\`\`text"$'\n'"${did}"$'\n'"\`\`\`"
 fi
 
+# Action tests (basis=statistical) are judged by the statistical comparison
+# with the baseline, and `ironhide repro` replays episode-library findings
+# only - never offer it for an action run.
+if [ "$basis" = statistical ]; then
+  basis_note="Basis: a statistical comparison of this run's breaches with your baseline's (preview)."
+  footer="A preview verdict is a measurement, not a certification — run advisory for a week before you gate."
+else
+  basis_note="Preview basis \`arena-l3-preview\`."
+  footer="Reproduce any finding locally with \`ironhide repro --finding-id <id>\`. A preview verdict is a measurement, not a certification — run advisory for a week before you gate."
+fi
+
 body="$(cat <<EOF
 $MARKER
 ### Ironhide · $badge
@@ -135,10 +187,10 @@ Graded on what your agent **did** in a sandboxed environment under attack, not o
 ${GATE_LINE:-IRONHIDE-GATE result=$RESULT}
 \`\`\`
 
-Preview basis \`arena-l3-preview\`.
+${basis_note}
 </details>
 
-<sub>Reproduce any finding locally with \`ironhide repro --finding-id <id>\`. A preview verdict is a measurement, not a certification — run advisory for a week before you gate.</sub>
+<sub>${footer}</sub>
 EOF
 )"
 

@@ -1,6 +1,6 @@
 # Ironhide Scan — GitHub Action
 
-<!-- Last updated: 2026-10-05 (v2.4.0: gate-down banner, step summary, usage line; v2.3.0: plain-language PR comment; v2.2.0: advisory_pass; every input, output, env
+<!-- Last updated: 2026-10-05 (v2.4.1: PASS says ready to deploy, agent_inactive, attacks_not_engaged, baseline_stale; v2.4.0: gate-down banner, step summary, usage line; v2.3.0: plain-language PR comment; v2.2.0: advisory_pass; every input, output, env
      var and exit code below verified against action.yml and the CLI). -->
 
 Pull the agent your PR builds into a sandboxed arena, attack it, and post a
@@ -16,7 +16,7 @@ then turn gating on.
 Pin a release tag, not a moving alias:
 
 ```yaml
-- uses: ironhide-ai/ironhide-scan@v2.4.0
+- uses: ironhide-ai/ironhide-scan@v2.4.1
 ```
 
 Set the repository variable `IRONHIDE_CLI_SHA256` to the CLI SHA-256 published
@@ -64,7 +64,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4    # must come BEFORE the action
-      - uses: ironhide-ai/ironhide-scan@v2.4.0
+      - uses: ironhide-ai/ironhide-scan@v2.4.1
         with:
           api_key: ${{ secrets.IRONHIDE_API_KEY }}
           adapter: your.module:agent  # replace with your actual driver
@@ -325,7 +325,7 @@ For example, keep the quick-start workflow's **both** `pull_request` and
 Both steps pin the same release and CLI digest:
 
 ```yaml
-- uses: ironhide-ai/ironhide-scan@v2.4.0
+- uses: ironhide-ai/ironhide-scan@v2.4.1
   with:
     api_key: ${{ secrets.IRONHIDE_API_KEY }}
     adapter: your.module:agent  # replace with your actual driver
@@ -334,7 +334,7 @@ Both steps pin the same release and CLI digest:
     profile: pr
     runs: 3
     baseline_branch: main
-- uses: ironhide-ai/ironhide-scan@v2.4.0
+- uses: ironhide-ai/ironhide-scan@v2.4.1
   if: github.event_name == 'push' && github.ref_name == 'main'
   with:
     api_key: ${{ secrets.IRONHIDE_API_KEY }}
