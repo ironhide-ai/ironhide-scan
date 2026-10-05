@@ -27,7 +27,7 @@ inputs:
   cli_url:
     description: "Where the verified CLI is fetched from. Defaults to the immutable release asset that ships with this Action version, so the pinned cli_sha256 stays valid for the life of the tag. Point it elsewhere only if you mirror the asset internally — a live server path would change under you on every Ironhide deploy and break this gate."
     required: false
-    default: "https://github.com/ironhide-ai/ironhide-scan/releases/download/v2.4.0/ironhide.py"
+    default: "https://github.com/ironhide-ai/ironhide-scan/releases/download/v2.4.1/ironhide.py"
   advisory_mode:
     description: "true (default) reports security regressions without failing. An UNAVAILABLE result the CLI marks advisory_pass=true - the evidence could not decide (an unconfirmed rise, a baseline too small to compare, a run left unverified by rate limits, a server-side outage) - is reported as NOT DECIDED with a warning and does not fail the build; it is never a pass. Configuration and setup failures (bad config or key, an agent that failed on every episode, nothing graded) still fail. Set false to gate: a FAIL, a BLOCK per block_on, or any UNAVAILABLE fails the build."
     required: false
