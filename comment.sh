@@ -52,6 +52,29 @@ case "$RESULT" in
     ;;
 esac
 
+# The month's run quota (the CLI's IRONHIDE-USAGE line; every number is the
+# server's, re-validated here so a malformed line renders nothing).
+usage_tok() { printf '%s' "${USAGE_LINE:-}" | grep -oE "(^| )$1=[0-9a-z-]+" | tail -1 | cut -d= -f2 || true; }
+u_used="$(usage_tok runs_used)"; u_quota="$(usage_tok run_quota)"
+u_reset="$(usage_tok resets_at)"; u_threshold="$(usage_tok threshold)"
+[[ "$u_used" =~ ^[0-9]{1,9}$ && "$u_quota" =~ ^[0-9]{1,9}$ && "$u_reset" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] \
+  || { u_used=""; u_quota=""; u_reset=""; }
+
+# Refused because the month's run quota is used up: the gate is DOWN and this
+# pull request was NOT tested. Verdict first, never pass styling.
+usage_note=""
+if [ "$RESULT" = UNAVAILABLE ] && [ "$gate_reason" = run_quota_exceeded ]; then
+  badge="⏻ Not tested — Ironhide's gate is down"
+  if [ -n "$u_used" ]; then
+    count="${u_used} of ${u_quota} runs"; when=" It resets on ${u_reset} (UTC)."
+  else
+    count="all of its runs"; when=""
+  fi
+  reason="**This pull request was NOT tested.** The account has used ${count} this month, so Ironhide's gate is down until the quota resets — nothing was checked, and this is not a pass.${when} Run \`ironhide upgrade\` (or open the console's Billing page) to restore it now."
+elif [ -n "$u_used" ] && { [ "$u_threshold" = 80 ] || [ "$u_threshold" = 100 ]; }; then
+  usage_note="Ironhide: ${u_used} of ${u_quota} runs used this month — resets ${u_reset}. \`ironhide upgrade\` for more."
+fi
+
 # A reused run (`ironhide test` found nothing changed since this branch's last
 # graded run) drove nothing: say so plainly instead of "passed comparison".
 reused="$(printf '%s' "$GATE_LINE" | grep -oE '(^| )reused=[0-9a-f]{1,40}' | tail -1 | cut -d= -f2 || true)"
@@ -98,6 +121,8 @@ $MARKER
 ### Ironhide · $badge
 
 $reason
+
+${usage_note}
 
 ${regressed}
 ${did}
