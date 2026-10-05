@@ -65,19 +65,53 @@ if [ -n "$reused" ]; then
   reason="Unchanged since ${reused:0:7} — previous result reused, not re-run. Nothing that decides the result changed since that commit's run, so its result stands for this one. ${outcome}"
 fi
 
+# Lead with the verdict in plain words; the raw gate line goes in a collapsed
+# "Show the math" aside (jargon firewall).
+#
+# Which tests regressed: the gate line's regressions= token, one item per test,
+# "key@breached/tries~baseline_breached/baseline_tries[+...]". Keys are
+# re-validated here, so a malformed token renders nothing rather than markup.
+regressed=""
+regressions="$(printf '%s' "$GATE_LINE" | grep -oE '(^| )regressions=[^ ]+' | tail -1 | cut -d= -f2- || true)"
+if [ -n "$regressions" ]; then
+  IFS=',' read -r -a items <<< "$regressions"
+  for item in "${items[@]}"; do
+    if [[ "$item" =~ ^([A-Za-z0-9][A-Za-z0-9._/-]{0,119})@([0-9]+)/([0-9]+)~([0-9]+)/([0-9]+) ]]; then
+      regressed+="- \`${BASH_REMATCH[1]}\` — breached ${BASH_REMATCH[2]} of ${BASH_REMATCH[3]} tries (baseline: ${BASH_REMATCH[4]} of ${BASH_REMATCH[5]})"$'\n'
+    fi
+  done
+fi
+if [ -n "$regressed" ]; then
+  regressed="**Regressed since the baseline**"$'\n\n'"${regressed}"
+fi
+
+# What the agent did, from the CLI's own report (the Action extracted it from
+# this job's log). Shown as literal text: no markdown, no code-fence escape.
+did=""
+if [ -n "${DETAILS_FILE:-}" ] && [ -s "$DETAILS_FILE" ]; then
+  did="$(head -n 80 "$DETAILS_FILE" | sed 's/`/'"'"'/g' | cut -c1-200)"
+  did="**What your agent did**"$'\n\n'"\`\`\`text"$'\n'"${did}"$'\n'"\`\`\`"
+fi
+
 body="$(cat <<EOF
 $MARKER
 ### Ironhide · $badge
 
 $reason
 
-Held-out episode details are masked.
+${regressed}
+${did}
 
-Observed-state verdict — graded on what your agent **did** in a sandboxed arena under attack, not on what it said. Preview basis \`arena-l3-preview\`.
+Graded on what your agent **did** in a sandboxed environment under attack, not on what it said. The answer key never leaves the Ironhide server.
+
+<details><summary>Show the math</summary>
 
 \`\`\`
 ${GATE_LINE:-IRONHIDE-GATE result=$RESULT}
 \`\`\`
+
+Preview basis \`arena-l3-preview\`.
+</details>
 
 <sub>Reproduce any finding locally with \`ironhide repro --finding-id <id>\`. A preview verdict is a measurement, not a certification — run advisory for a week before you gate.</sub>
 EOF
@@ -90,10 +124,11 @@ if [ -z "$pr_number" ]; then
 fi
 
 repo="$GITHUB_REPOSITORY"
-# Find our own comment (marker at the top of the body) so we update one comment
-# instead of stacking a new one every push.
+# Find our own comment (marker at the top of the body, written by the Actions
+# bot this job's token acts as) so we update one comment instead of stacking a
+# new one every push - never someone else's comment that copied the marker.
 existing="$(gh api "repos/$repo/issues/$pr_number/comments" --paginate \
-  | jq -r --arg m "$MARKER" 'map(select(.body | startswith($m))) | .[0].id // empty')"
+  | jq -r --arg m "$MARKER" 'map(select((.body | startswith($m)) and .user.login == "github-actions[bot]")) | .[0].id // empty')"
 
 if [ -n "$existing" ]; then
   gh api -X PATCH "repos/$repo/issues/comments/$existing" -f body="$body" >/dev/null
