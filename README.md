@@ -1,6 +1,6 @@
 # Ironhide Scan — GitHub Action
 
-<!-- Last updated: 2026-10-05 (v2.4.1: PASS says ready to deploy, agent_inactive, attacks_not_engaged, baseline_stale; v2.4.0: gate-down banner, step summary, usage line; v2.3.0: plain-language PR comment; v2.2.0: advisory_pass; every input, output, env
+<!-- Last updated: 2026-10-15 (v2.5.0: adapter_failed receipt for adapter and --agent-factory aborts, agent-raised errors can no longer forge a server-outage NOT DECIDED, gate receipt and PR-comment details read from a trusted file channel; v2.4.1: PASS says ready to deploy, agent_inactive, attacks_not_engaged, baseline_stale; v2.4.0: gate-down banner, step summary, usage line; v2.3.0: plain-language PR comment; v2.2.0: advisory_pass; every input, output, env
      var and exit code below verified against action.yml and the CLI). -->
 
 Pull the agent your PR builds into a sandboxed arena, attack it, and post a
@@ -16,7 +16,7 @@ then turn gating on.
 Pin a release tag, not a moving alias:
 
 ```yaml
-- uses: ironhide-ai/ironhide-scan@v2.4.1
+- uses: ironhide-ai/ironhide-scan@v2.5.0
 ```
 
 Set the repository variable `IRONHIDE_CLI_SHA256` to the CLI SHA-256 published
@@ -64,7 +64,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4    # must come BEFORE the action
-      - uses: ironhide-ai/ironhide-scan@v2.4.1
+      - uses: ironhide-ai/ironhide-scan@v2.5.0
         with:
           api_key: ${{ secrets.IRONHIDE_API_KEY }}
           adapter: your.module:agent  # replace with your actual driver
@@ -198,7 +198,46 @@ from older CLIs); any other `UNAVAILABLE` fails.
 | --- | --- | --- |
 | `unconfirmed`, `baseline_too_small`, `unverified`, `rate_limited`, `not_comparable` | exit 0, `advisory_pass=true`, NOT DECIDED | the evidence could not decide |
 | `run_quota_exceeded`, `action_envs_disabled` | exit 0, `advisory_pass=true`, NOT DECIDED | an outage on Ironhide's side; nothing ran |
+| `adapter_failed` | exit 2 in both modes | the episode-library adapter (`--adapter`) or `--agent-factory` agent aborted before comparison, or on an action test a framework agent's `.invoke()` raised, the agent raised Ironhide's own error type, or the factory returned no agent; inspect the job log and model/provider configuration |
 | `agent_failed_every_episode`, `nothing_graded`, `no_tests`, `no_eligible_runs`, `baseline_unreadable`, `baseline_empty`, `runs_malformed`, `pin_unknown`, `profile_identity_mismatch`, `profile_policy_mismatch`, `gate_no_result`, or a reason the CLI does not know | exit 2 | something you have to fix |
+
+For `adapter_failed`, a failure before any submission reports `graded=0`. If
+earlier submissions succeeded, the receipt reports `captured=N` (a lower bound when episodes run in parallel) and omits
+`graded`: gate eligibility was never collected. Earlier observations stay stored;
+the aborted run does not compare or save a baseline. The receipt contains only
+static failure metadata, and the PR comment carries no "what your agent did"
+block for it; provider diagnostics remain in the job log.
+
+### Where the Action reads the gate line and the comment details
+
+Your agent runs inside `ironhide test`, so the job log is shared: anything your
+agent, its model provider or a library prints lands in the same stream as the
+CLI's own lines - and can look exactly like them (a gate-shaped `result=PASS`,
+or a "failures - what the agent did:" heading with a provider error, and any
+credential in it, underneath). The Action therefore never reads its verdict or
+the PR comment's details from the log. It names two fresh, randomly named
+files under `$RUNNER_TEMP` for each run and the CLI writes them from its own
+code:
+
+| variable | what the CLI writes |
+| --- | --- |
+| `IRONHIDE_RECEIPT_FILE` | every `IRONHIDE-GATE` / `IRONHIDE-USAGE` line it prints, one printable line each |
+| `IRONHIDE_DETAILS_FILE` | its "what the agent did" block for failed action tests - the same text as the log, without colour, capped at 80 lines of 200 characters. Its evidence lines quote the values your agent passed to its tools (`dest=`, `target=`, `account=`, `principal=`, `amount=`): that is the breach evidence, chosen by your agent's own tool calls |
+
+The `result`, `gate_line` and `code` outputs, the usage note and the comment's
+"What your agent did" section come only from those files. The CLI creates
+both files empty when it starts (before your code is imported) and removes the
+two variables from its environment, so your agent is not handed their names. A
+run that dies before its receipt leaves an empty receipt, which is
+**UNAVAILABLE**, never a pass. This guards against untrusted *output* only:
+code you run in the job (or an agent with a real shell or file-write tool) can
+still list `$RUNNER_TEMP`, read its process environment and write any file it
+likes.
+
+A CLI older than this channel (a `cli_url` mirror pinned to an earlier
+release) writes no receipt: the Action then reads the gate line from the log as
+before, with a warning, and the comment omits the details block rather than
+scrape them from the log. A nonzero CLI exit never reads as success either way.
 
 | code | meaning |
 | --- | --- |
@@ -325,7 +364,7 @@ For example, keep the quick-start workflow's **both** `pull_request` and
 Both steps pin the same release and CLI digest:
 
 ```yaml
-- uses: ironhide-ai/ironhide-scan@v2.4.1
+- uses: ironhide-ai/ironhide-scan@v2.5.0
   with:
     api_key: ${{ secrets.IRONHIDE_API_KEY }}
     adapter: your.module:agent  # replace with your actual driver
@@ -334,7 +373,7 @@ Both steps pin the same release and CLI digest:
     profile: pr
     runs: 3
     baseline_branch: main
-- uses: ironhide-ai/ironhide-scan@v2.4.1
+- uses: ironhide-ai/ironhide-scan@v2.5.0
   if: github.event_name == 'push' && github.ref_name == 'main'
   with:
     api_key: ${{ secrets.IRONHIDE_API_KEY }}

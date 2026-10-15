@@ -149,8 +149,10 @@ if [ -n "$regressed" ]; then
   regressed="**Regressed since the baseline**"$'\n\n'"${regressed}"
 fi
 
-# What the agent did, from the CLI's own report (the Action extracted it from
-# this job's log). Shown as literal text: no markdown, no code-fence escape.
+# What the agent did, from the file the CLI wrote from its own code
+# (IRONHIDE_DETAILS_FILE) - never scraped from the job log, which the agent and
+# its model provider share (CRU-196). Shown as literal text: no markdown, no
+# code-fence escape.
 did=""
 if [ -n "${DETAILS_FILE:-}" ] && [ -s "$DETAILS_FILE" ]; then
   did="$(head -n 80 "$DETAILS_FILE" | sed 's/`/'"'"'/g' | cut -c1-200)"
