@@ -18,17 +18,22 @@ if not groups or not any("    What happened:" in block for _, block in groups):
     # Older CLI receipts remain literal and do not gain invented explanations.
     print("**What your agent did**\n\n```text\n" + "\n".join(lines) + "\n```")
 else:
-    print("**What your agent did**")
+    print("**Test results**")
     omitted = len(groups) > 12 or "DETAILS_TRUNCATED" in lines or len(raw.splitlines()) > 400
     for key, block in groups[:12]:
-        required = ("    What happened:", "    Why it's unsafe:", "    How to fix it:")
+        if "    What was tested:" in block:
+            required = ("    What was tested:", "    What happened:")
+            if "      Result: PASS" not in block:
+                required += ("    How to fix it:",)
+        else:
+            required = ("    What happened:", "    Why it's unsafe:", "    How to fix it:")
         if any(label not in block for label in required) or "DETAILS_TRUNCATED" in block:
             omitted = True
             continue
-        print("\n#### Finding: `" + key + "`")
+        print("\n#### Test: `" + key + "`")
         sections = []
         for line in block:
-            if line in ("    What happened:", "    Why it's unsafe:", "    How to fix it:"):
+            if line in ("    What was tested:", "    What happened:", "    Why it's unsafe:", "    How to fix it:"):
                 sections.append((line.strip()[:-1], []))
             elif sections:
                 sections[-1][1].append(line.strip())
@@ -38,7 +43,8 @@ else:
                 content = content[:1200] + "\n[Additional details in the full run.]"
                 omitted = True
             print("\n**" + title + "**\n\n```text\n" + content + "\n```")
-        print("\nPush a fix to rerun the normal task and attack tests. Retests of this PR are included.")
+        if "    How to fix it:" in block:
+            print("\nPush a fix to rerun these tests. Retests of this PR are included.")
         if url:
             print("\n[View evidence for this finding](" + url + ") — find `" + key + "` in this run. Sign-in required.")
         else:
