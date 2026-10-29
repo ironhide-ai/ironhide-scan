@@ -45,6 +45,8 @@ esac
 gate_reason="$(printf '%s' "$GATE_LINE" | grep -oE '(^| )reason=[a-z_]+' | tail -1 | cut -d= -f2 || true)"
 advisory_pass="$(printf '%s' "$GATE_LINE" | grep -oE '(^| )advisory_pass=[a-z]+' | tail -1 | cut -d= -f2 || true)"
 case "$gate_reason" in
+  concurrent_test_limit) why="all test slots on your account are busy. Wait for a test to finish, then rerun the Ironhide check. This PR was not tested and no PR allowance was used" ;;
+  test_slot_expired) why="the test submission window ended before this check finished. Rerun the Ironhide check; this is not a security pass" ;;
   run_quota_exceeded) why="the monthly PR allowance is used up, so this new PR was not tested" ;;
   action_envs_disabled) why="action tests are not enabled on the Ironhide server, so nothing was run" ;;
   unconfirmed) why="a test breached more often than the baseline but could not be re-run to confirm it" ;;
@@ -105,13 +107,17 @@ u_reset="$(usage_tok resets_at)"; u_threshold="$(usage_tok threshold)"
 # pull request was NOT tested. Verdict first, never pass styling.
 usage_note=""
 if [ "$RESULT" = UNAVAILABLE ] && [ "$gate_reason" = run_quota_exceeded ]; then
-  badge="⏻ Not tested — Ironhide's gate is down"
+  badge="Review limit reached — this PR was not tested"
   if [ -n "$u_used" ]; then
-    count="${u_used} of ${u_quota} PRs"; when=" It resets on ${u_reset} (UTC)."
+    count="${u_used} of ${u_quota} PRs"; when=" Your allowance resets on ${u_reset} (UTC)."
   else
     count="its PR allowance"; when=""
   fi
-  reason="**This pull request was NOT tested.** The account has used ${count} this month, so Ironhide's gate is down until the quota resets — nothing was checked, and this is not a pass.${when} Run \`ironhide upgrade\` (or open the console's Billing page) to restore it now."
+  reason="You have used ${count} this month.${when}
+
+**To test this PR:** [upgrade your plan](https://app.ironhideai.com/#billing), then rerun the Ironhide check. Or wait for your allowance to reset and rerun it then.
+
+Retests of PRs already counted are included. This PR has no security result because the tests did not run."
 elif [ -n "$u_used" ] && { [ "$u_threshold" = 80 ] || [ "$u_threshold" = 100 ]; }; then
   usage_note="Ironhide: ${u_used} of ${u_quota} PRs reviewed this month — resets ${u_reset}. \`ironhide upgrade\` for more."
 fi
@@ -194,6 +200,14 @@ ${basis_note}
 <sub>${footer}</sub>
 EOF
 )"
+
+# No tests ran: omit findings, grading claims, replay instructions and raw diagnostics.
+if [ "$RESULT" = UNAVAILABLE ] && [ "$gate_reason" = run_quota_exceeded ]; then
+  body="$MARKER
+### Ironhide · $badge
+
+$reason"
+fi
 
 pr_number="$(jq -r '.pull_request.number // .number // empty' "$GITHUB_EVENT_PATH")"
 if [ -z "$pr_number" ]; then
