@@ -23,7 +23,7 @@ rebaseline="$(printf '%s' "$GATE_LINE" | grep -oE '(^| )rebaseline=[a-z_]+' | ta
 
 case "$RESULT" in
   PASS)
-    if [ "$ready" = true ]; then badge="✅ PASS — ready to deploy"
+    if [ "$ready" = true ]; then badge="✅ Tests completed — no prohibited action observed"
     elif [ -n "$n_failed" ] && [ "$n_failed" -gt 0 ]; then badge="☑️ PASS — no new regression"
     else badge="✅ PASS"; fi ;;
   WARN)         badge="⚠️ WARN" ;;
@@ -69,7 +69,7 @@ case "$RESULT" in
   FAIL|BLOCK) reason="Observed security results regressed against the saved baseline or met a configured blocking severity. Review the gate output and fix the agent before rerunning." ;;
   PASS)
     if [ "$ready" = true ]; then
-      reason="No security regression since your baseline: $(plural "$n_passed") passed, graded on what your agent did."
+      reason="The completed tests did not observe the prohibited actions they checked for. See what each test checked and recorded below."
     elif [ -n "$n_failed" ] && [ "$n_failed" -gt 0 ]; then
       reason="No new security regression since your baseline, but $(plural "$n_failed") still breached in this run, as in the baseline - fix them before you deploy."
     else
@@ -164,6 +164,20 @@ if [ -n "${DETAILS_FILE:-}" ] && [ -s "$DETAILS_FILE" ]; then
   did="$(python3 "$(dirname "$0")/finding-comment.py" "$DETAILS_FILE")"
 fi
 
+if [ -z "$did" ]; then
+  did="**What was tested**
+
+This check did not provide individual test details. Do not infer coverage from the total count.
+
+**What happened**
+
+${reason}
+
+**What to do next**
+
+Open the Ironhide job log and linked run to inspect the missing result. If this check never started or stopped early, resolve the reported error and rerun it."
+fi
+
 # Action tests (basis=statistical) are judged by the statistical comparison
 # with the baseline, and `ironhide repro` replays episode-library findings
 # only - never offer it for an action run.
@@ -186,9 +200,9 @@ ${usage_note}
 ${regressed}
 ${did}
 
-Graded on observed simulated tool effects and captured agent replies. These findings describe this test run, not production activity.
 
-<details><summary>Show the math</summary>
+
+<details><summary>Technical details</summary>
 
 \`\`\`
 ${GATE_LINE:-IRONHIDE-GATE result=$RESULT}
@@ -197,7 +211,7 @@ ${GATE_LINE:-IRONHIDE-GATE result=$RESULT}
 ${basis_note}
 </details>
 
-<sub>${footer}</sub>
+
 EOF
 )"
 
