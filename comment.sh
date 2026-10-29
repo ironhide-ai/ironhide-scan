@@ -45,7 +45,7 @@ esac
 gate_reason="$(printf '%s' "$GATE_LINE" | grep -oE '(^| )reason=[a-z_]+' | tail -1 | cut -d= -f2 || true)"
 advisory_pass="$(printf '%s' "$GATE_LINE" | grep -oE '(^| )advisory_pass=[a-z]+' | tail -1 | cut -d= -f2 || true)"
 case "$gate_reason" in
-  run_quota_exceeded) why="the plan's monthly run quota is spent, so nothing was run" ;;
+  run_quota_exceeded) why="the monthly PR allowance is used up, so this new PR was not tested" ;;
   action_envs_disabled) why="action tests are not enabled on the Ironhide server, so nothing was run" ;;
   unconfirmed) why="a test breached more often than the baseline but could not be re-run to confirm it" ;;
   baseline_too_small) why="a test breached more often than a baseline too small to compare with" ;;
@@ -107,13 +107,13 @@ usage_note=""
 if [ "$RESULT" = UNAVAILABLE ] && [ "$gate_reason" = run_quota_exceeded ]; then
   badge="⏻ Not tested — Ironhide's gate is down"
   if [ -n "$u_used" ]; then
-    count="${u_used} of ${u_quota} runs"; when=" It resets on ${u_reset} (UTC)."
+    count="${u_used} of ${u_quota} PRs"; when=" It resets on ${u_reset} (UTC)."
   else
-    count="all of its runs"; when=""
+    count="its PR allowance"; when=""
   fi
   reason="**This pull request was NOT tested.** The account has used ${count} this month, so Ironhide's gate is down until the quota resets — nothing was checked, and this is not a pass.${when} Run \`ironhide upgrade\` (or open the console's Billing page) to restore it now."
 elif [ -n "$u_used" ] && { [ "$u_threshold" = 80 ] || [ "$u_threshold" = 100 ]; }; then
-  usage_note="Ironhide: ${u_used} of ${u_quota} runs used this month — resets ${u_reset}. \`ironhide upgrade\` for more."
+  usage_note="Ironhide: ${u_used} of ${u_quota} PRs reviewed this month — resets ${u_reset}. \`ironhide upgrade\` for more."
 fi
 
 # A reused run (`ironhide test` found nothing changed since this branch's last
@@ -155,8 +155,7 @@ fi
 # code-fence escape.
 did=""
 if [ -n "${DETAILS_FILE:-}" ] && [ -s "$DETAILS_FILE" ]; then
-  did="$(head -n 80 "$DETAILS_FILE" | sed 's/`/'"'"'/g' | cut -c1-200)"
-  did="**What your agent did**"$'\n\n'"\`\`\`text"$'\n'"${did}"$'\n'"\`\`\`"
+  did="$(python3 "$(dirname "$0")/finding-comment.py" "$DETAILS_FILE")"
 fi
 
 # Action tests (basis=statistical) are judged by the statistical comparison
@@ -181,7 +180,7 @@ ${usage_note}
 ${regressed}
 ${did}
 
-Graded on what your agent **did** in a sandboxed environment under attack, not on what it said. The answer key never leaves the Ironhide server.
+Graded on observed simulated tool effects and captured agent replies. These findings describe this test run, not production activity.
 
 <details><summary>Show the math</summary>
 
