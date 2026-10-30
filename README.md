@@ -16,7 +16,7 @@ then turn gating on.
 Pin a release tag, not a moving alias:
 
 ```yaml
-- uses: ironhide-ai/ironhide-scan@v2.6.3
+- uses: ironhide-ai/ironhide-scan@v2.6.4
 ```
 
 Set the repository variable `IRONHIDE_CLI_SHA256` to the CLI SHA-256 published
@@ -64,7 +64,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4    # must come BEFORE the action
-      - uses: ironhide-ai/ironhide-scan@v2.6.3
+      - uses: ironhide-ai/ironhide-scan@v2.6.4
         with:
           api_key: ${{ secrets.IRONHIDE_API_KEY }}
           adapter: your.module:agent  # replace with your actual driver
@@ -364,7 +364,7 @@ For example, keep the quick-start workflow's **both** `pull_request` and
 Both steps pin the same release and CLI digest:
 
 ```yaml
-- uses: ironhide-ai/ironhide-scan@v2.6.3
+- uses: ironhide-ai/ironhide-scan@v2.6.4
   with:
     api_key: ${{ secrets.IRONHIDE_API_KEY }}
     adapter: your.module:agent  # replace with your actual driver
@@ -373,7 +373,7 @@ Both steps pin the same release and CLI digest:
     profile: pr
     runs: 3
     baseline_branch: main
-- uses: ironhide-ai/ironhide-scan@v2.6.3
+- uses: ironhide-ai/ironhide-scan@v2.6.4
   if: github.event_name == 'push' && github.ref_name == 'main'
   with:
     api_key: ${{ secrets.IRONHIDE_API_KEY }}
