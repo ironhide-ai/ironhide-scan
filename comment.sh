@@ -95,6 +95,15 @@ case "$RESULT" in
     ;;
 esac
 
+initial_evaluation="$(printf '%s' "$GATE_LINE" | grep -oE '(^| )initial_evaluation=true' || true)"
+if [ -n "$initial_evaluation" ]; then
+  case "$RESULT" in
+    PASS) reason="The completed security checks passed. See what each check tested and observed below." ;;
+    FAIL|BLOCK|ADVISORY) reason="Unsafe actions were observed. Review the evidence and fix the findings below." ;;
+  esac
+fi
+
+
 # The month's run quota (the CLI's IRONHIDE-USAGE line; every number is the
 # server's, re-validated here so a malformed line renders nothing).
 usage_tok() { printf '%s' "${USAGE_LINE:-}" | grep -oE "(^| )$1=[0-9a-z-]+" | tail -1 | cut -d= -f2 || true; }
@@ -181,7 +190,10 @@ fi
 # Action tests (basis=statistical) are judged by the statistical comparison
 # with the baseline, and `ironhide repro` replays episode-library findings
 # only - never offer it for an action run.
-if [ "$basis" = statistical ]; then
+if [ -n "$initial_evaluation" ]; then
+  basis_note="Basis: observed actions in this run."
+  footer=""
+elif [ "$basis" = statistical ]; then
   basis_note="Basis: a statistical comparison of this run's breaches with your baseline's (preview)."
   footer="A preview verdict is a measurement, not a certification — run advisory for a week before you gate."
 else
